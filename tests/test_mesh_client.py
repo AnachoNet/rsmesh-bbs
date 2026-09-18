@@ -72,9 +72,13 @@ class TestMeshClientMenus:
         )
 
         mesh_client.send("m")
-        replies = mesh_client.send_joined("r")
-        assert "Hello" in replies
-        assert "SNDR" in replies
+        mesh_client.send("r")
+        replies = mesh_client.send_joined("a")
+        assert "Subj: Hello" in replies
+        assert "from SNDR" in replies
+        body = mesh_client.send_joined("1")
+        assert "Hello" in body
+        assert "Body text" in body
 
     def test_bulletin_menu(self, mesh_client):
         replies = mesh_client.send_joined("b")

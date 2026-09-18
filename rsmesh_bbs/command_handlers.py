@@ -11,7 +11,7 @@ from .db_operations import (
 from .utils import (
     get_node_id_from_num, get_node_info,
     get_node_short_name, send_message, send_user_message, send_user_messages,
-    update_user_state, bundle_bulletin_read_list,
+    update_user_state, bundle_bulletin_read_list, bundle_mail_inbox_list,
 )
 from .mesh_ui import MAIL_SUBMENU_TEXT, load_main_menu_body
 from .node_resolution import is_hex_node_id
@@ -26,23 +26,31 @@ def _parse_int(message):
         return None
 
 
-def _show_mail_inbox(sender_id, interface, prefix_messages=None, return_to_mail_menu=False):
+def _count_unread_mail(mail_rows):
+    return sum(1 for row in mail_rows if (row[5] or "N").upper() == "N")
+
+
+def _mail_inbox_summary_text(mail_rows):
+    total = len(mail_rows)
+    unread = _count_unread_mail(mail_rows)
+    summary = f"{total} message(s)"
+    if unread:
+        summary += f" - {unread} new message(s)"
+    return with_exit_prompt(f"{summary}\n[N]ew [A]ll")
+
+
+def _show_mail_inbox_summary(
+    sender_id,
+    interface,
+    prefix_messages=None,
+    return_to_mail_menu=False,
+):
     sender_node_id = get_node_id_from_num(sender_id, interface)
     mail = get_mail(sender_node_id, interface)
     if mail:
-        messages = list(prefix_messages or []) + [
-            with_exit_prompt(f"{len(mail)} message(s). Select message number to read:"),
-        ]
-        for msg in mail:
-            mail_id, sender_short_name, subject, date, _unique_id, read_flag = msg
-            header = f"-{mail_id}-"
-            if (read_flag or "N").upper() == "N":
-                header += " *NEW*"
-            messages.append(
-                f"{header}\nDate: {date}\nFrom: {sender_short_name}\nSubject: {subject}"
-            )
+        messages = list(prefix_messages or []) + [_mail_inbox_summary_text(mail)]
         send_user_messages(messages, sender_id, interface)
-        update_user_state(sender_id, {'command': 'MAIL', 'step': 2})
+        update_user_state(sender_id, {"command": "MAIL", "step": 2})
     else:
         empty_notice = list(prefix_messages or [])
         empty_notice.append("No messages.")
@@ -54,6 +62,43 @@ def _show_mail_inbox(sender_id, interface, prefix_messages=None, return_to_mail_
         else:
             send_user_message("No messages.", sender_id, interface)
             update_user_state(sender_id, None)
+
+
+def _filter_mail_rows(mail_rows, mail_filter):
+    if mail_filter == "new":
+        return [row for row in mail_rows if (row[5] or "N").upper() == "N"]
+    return mail_rows
+
+
+def _show_mail_inbox_list(
+    sender_id,
+    interface,
+    mail_rows,
+    prefix_messages=None,
+    mail_filter="all",
+):
+    footer = with_exit_prompt("Select message number to read:")
+    bundles = bundle_mail_inbox_list(mail_rows, footer=footer)
+    messages = list(prefix_messages or []) + bundles
+    send_user_messages(messages, sender_id, interface)
+    update_user_state(
+        sender_id,
+        {"command": "MAIL", "step": 21, "mail_inbox_filter": mail_filter},
+    )
+
+
+def _show_mail_inbox(
+    sender_id,
+    interface,
+    prefix_messages=None,
+    return_to_mail_menu=False,
+):
+    _show_mail_inbox_summary(
+        sender_id,
+        interface,
+        prefix_messages=prefix_messages,
+        return_to_mail_menu=return_to_mail_menu,
+    )
 
 
 def _send_bulletin_delete_prompt(sender_id, interface, board_name, prefix_messages=None):
@@ -377,29 +422,90 @@ def handle_mail_steps(sender_id, message, step, state, interface, bbs_nodes):
         message = message[0]
 
     if step == 2:
+        sender_node_id = get_node_id_from_num(sender_id, interface)
+        mail = get_mail(sender_node_id, interface)
+        choice = message.lower()
+        if choice == "n":
+            filtered = [row for row in mail if (row[5] or "N").upper() == "N"]
+            if not filtered:
+                _show_mail_inbox_summary(
+                    sender_id,
+                    interface,
+                    prefix_messages=["No new messages."],
+                )
+                return
+            _show_mail_inbox_list(sender_id, interface, filtered, mail_filter="new")
+            return
+        if choice == "a":
+            _show_mail_inbox_list(sender_id, interface, mail, mail_filter="all")
+            return
+        if message.lower() == "x":
+            if _mail_returns_to_submenu():
+                handle_mail_menu_command(sender_id, interface)
+            else:
+                handle_help_command(sender_id, interface)
+            return
+        _show_mail_inbox_summary(
+            sender_id,
+            interface,
+            prefix_messages=["Choose N, A, or X."],
+        )
+        return
+
+    elif step == 21:
+        if message.lower() == "x":
+            _show_mail_inbox(sender_id, interface)
+            return
         mail_id = _parse_int(message)
+        sender_node_id = get_node_id_from_num(sender_id, interface)
+        mail = get_mail(sender_node_id, interface)
+        mail_filter = state.get("mail_inbox_filter") or "all"
+        visible_mail = _filter_mail_rows(mail, mail_filter)
         if mail_id is None:
-            _show_mail_inbox(
-                sender_id, interface,
+            _show_mail_inbox_list(
+                sender_id,
+                interface,
+                visible_mail,
                 prefix_messages=["Invalid message number."],
+                mail_filter=mail_filter,
             )
             return
         try:
             sender_node_id = get_node_id_from_num(sender_id, interface)
-            sender, date, subject, content, unique_id = get_mail_content(mail_id, sender_node_id, interface)
+            sender, date, subject, content, unique_id = get_mail_content(
+                mail_id, sender_node_id, interface
+            )
             if unique_id is None:
                 raise TypeError("mail not found")
             mail_text = f"Date: {date}\nFrom: {sender}\nSubject: {subject}\n{content}"
-            send_user_messages([
-                mail_text,
-                with_exit_prompt("Message command:\n[K]eep  [D]elete  [R]eply"),
-            ], sender_id, interface)
-            update_user_state(sender_id, {'command': 'MAIL', 'step': 4, 'mail_id': mail_id, 'unique_id': unique_id, 'sender': sender, 'subject': subject, 'content': content})
+            send_user_messages(
+                [
+                    mail_text,
+                    with_exit_prompt("Message command:\n[K]eep  [D]elete  [R]eply"),
+                ],
+                sender_id,
+                interface,
+            )
+            update_user_state(
+                sender_id,
+                {
+                    "command": "MAIL",
+                    "step": 4,
+                    "mail_id": mail_id,
+                    "unique_id": unique_id,
+                    "sender": sender,
+                    "subject": subject,
+                    "content": content,
+                },
+            )
         except TypeError:
             logging.info(f"Node {sender_id} tried to access non-existent message")
-            _show_mail_inbox(
-                sender_id, interface,
+            _show_mail_inbox_list(
+                sender_id,
+                interface,
+                visible_mail,
                 prefix_messages=["Mail not found."],
+                mail_filter=mail_filter,
             )
 
     elif step == 3:

@@ -62,6 +62,63 @@ def bundle_bulletin_read_list(board_name, bulletins, footer=None, max_size=MESH_
     return bundles
 
 
+def format_mail_inbox_summary_lines(mail_id, sender_short_name, subject, date, read_flag):
+    unread = (read_flag or "N").upper() == "N"
+    marker = " *" if unread else ""
+    return [
+        f"{mail_id} {date} from {sender_short_name}{marker}",
+        f"     Subj: {subject}",
+    ]
+
+
+def bundle_mail_inbox_list(
+    mail_rows,
+    footer=None,
+    summaries_per_message=3,
+    max_size=MESH_MESSAGE_MAX_SIZE,
+):
+    """Bundle compact mail summaries (2 lines each), up to N entries per mesh message."""
+    if footer is None:
+        footer = "Select message number to read:"
+    if not mail_rows:
+        return ["No messages."]
+
+    bundles = []
+    for chunk_start in range(0, len(mail_rows), summaries_per_message):
+        chunk = mail_rows[chunk_start : chunk_start + summaries_per_message]
+        lines = []
+        for row in chunk:
+            mail_id, sender_short_name, subject, date, _unique_id, read_flag = row
+            lines.extend(
+                format_mail_inbox_summary_lines(
+                    mail_id, sender_short_name, subject, date, read_flag
+                )
+            )
+        text = "\n".join(lines)
+        if len(text) <= max_size:
+            bundles.append(text)
+            continue
+        partial = ""
+        for line in lines:
+            candidate = line if not partial else f"{partial}\n{line}"
+            if len(candidate) <= max_size:
+                partial = candidate
+                continue
+            if partial:
+                bundles.append(partial)
+            partial = line[:max_size] if len(line) > max_size else line
+        if partial:
+            bundles.append(partial)
+
+    last = bundles[-1]
+    footer_text = f"{last}\n{footer}"
+    if len(footer_text) <= max_size:
+        bundles[-1] = footer_text
+    else:
+        bundles.append(footer)
+    return bundles
+
+
 def bundle_lines_for_mesh(lines, max_size=MESH_MESSAGE_MAX_SIZE):
     bundles = []
     current = ""

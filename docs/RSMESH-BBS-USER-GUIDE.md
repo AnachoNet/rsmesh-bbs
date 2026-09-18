@@ -42,7 +42,7 @@ Some BBS systems broadcast Urgent bulletins as alerts on the primary (0) channel
 
 Open Mail from the Main Menu with **`M`**, then **`R`** (Read) or **`S`** (Send).
 
-**Read Mail** — Select a message number, then `[K]eep`, `[D]elete`, or `[R]eply`. Reply uses the same process as Sending a Mail message.
+**Read Mail** — Shows a summary (for example `8 message(s) - 2 new message(s)`) and `[N]ew [A]ll` to list new or all messages. The list is compact (ID, date, sender, subject) with up to three messages per mesh packet. Select a message number, then `[K]eep`, `[D]elete`, or `[R]eply`. Reply uses the same process as Sending a Mail message.
 
 **Send Mail** — Enter the recipient **short name** (or pick from a list when several nodes match). Enter a Subject when prompted, then Body in one or more messages. Send `END` by itself to finish. While you type the body, the BBS will not reply until `END`.
 
