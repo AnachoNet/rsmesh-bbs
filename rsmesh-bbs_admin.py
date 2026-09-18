@@ -1752,6 +1752,7 @@ def export_sys_config_to_yaml_entry():
     rows = get_sys_config_entries()
     if not rows:
         _finish_action_message("No configuration entries found to export.", page_title)
+        prompt_continue()
         return
 
     confirm = input_bold(
@@ -1759,6 +1760,7 @@ def export_sys_config_to_yaml_entry():
     ).strip().upper()
     if confirm != 'Y':
         _finish_action_message("Export cancelled.", page_title)
+        prompt_continue()
         return
 
     output_path = export_sys_config_to_yaml(rows, DEFAULT_CONFIG_FILE)
@@ -1769,6 +1771,7 @@ def export_sys_config_to_yaml_entry():
         f"Exported configuration to {output_path} ({schema_count} known settings).",
         page_title,
     )
+    prompt_continue()
 
 def backup_application_entry():
     page_title = "Backup"
@@ -2219,6 +2222,15 @@ def edit_module_flags_entry():
         _finish_action_message("Module not found.", "Edit Module Flags")
         return
     begin_form_screen("Edit Module Flags")
+    print_bold(
+        join_display_fields(
+            f"Module: {current[1]}",
+            f"ID: {current[0]}",
+            f"Dir: {current[2]}",
+            f"Menu: {current[3]}",
+        )
+    )
+    console.print()
     enabled = _normalize_yn(input_bold(f"Enabled (Y/N) [{current[4]}]: "), current[4])
     schedule_enabled = _normalize_yn(
         input_bold(f"Schedule enabled (Y/N) [{current[5]}]: "),
@@ -2407,10 +2419,9 @@ def input_select_row(prompt):
 def _finish_action_message(message, page_title):
     clear_screen()
     begin_data_display(page_title)
-    message_lines = message.splitlines() or [""]
-    for line in message_lines:
-        _print_no_data(line)
-    lines_used = PAGE_HEADER_LINE_COUNT + len(message_lines)
+    display_lines = admin_ui.message_lines_for_display(message)
+    admin_ui.render_message_body(message)
+    lines_used = PAGE_HEADER_LINE_COUNT + len(display_lines)
     _pad_to_line(MENU_SEPARATOR_LINE, lines_used)
     print_separator()
 

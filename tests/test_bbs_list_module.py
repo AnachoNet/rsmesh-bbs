@@ -60,6 +60,7 @@ class TestBbsListStorage:
             "node_hex": "!9e9d8704",
             "location": "Waynedale/Fort Wayne",
             "sync_interest": "Y",
+            "peer_sync": "Y",
             "is_local": "Y",
         }
         remote_entry = {
@@ -69,13 +70,14 @@ class TestBbsListStorage:
             "node_hex": "!remote01",
             "location": "",
             "sync_interest": "N",
+            "peer_sync": "N",
             "is_local": "N",
         }
         assert storage.format_list_line(local_entry) == (
-            "1  RSNA  RSMesh BBS  !9e9d8704  Waynedale/Fort Wayne  sync=Y  local=Y"
+            "1  RSNA  RSMesh BBS  !9e9d8704  Waynedale/Fort Wayne  sync=Y  peer=Y  local=Y"
         )
         assert storage.format_list_line(remote_entry) == (
-            "2  RMT1  Remote BBS  !remote01  -  sync=N  local=N"
+            "2  RMT1  Remote BBS  !remote01  -  sync=N  peer=N  local=N"
         )
 
     def test_format_mesh_list_line_truncates_location(self, bbs_list_db):
@@ -86,13 +88,14 @@ class TestBbsListStorage:
             "node_hex": "!9e9d8704",
             "location": "Waynedale/Fort Wayne Indiana",
             "sync_interest": "Y",
+            "peer_sync": "Y",
             "is_local": "Y",
         }
         assert storage.format_mesh_list_line(entry) == (
             "3  RSNA  RSMesh BBS  !9e9d8704  Waynedale/Fort… *"
         )
         assert storage.format_list_line(entry) == (
-            "3  RSNA  RSMesh BBS  !9e9d8704  Waynedale/Fort Wayne Indiana  sync=Y  local=Y"
+            "3  RSNA  RSMesh BBS  !9e9d8704  Waynedale/Fort Wayne Indiana  sync=Y  peer=Y  local=Y"
         )
 
     def test_get_entry_by_id(self, bbs_list_db):
@@ -184,7 +187,14 @@ class TestBbsListSync:
 
     def test_outbound_sync_marks_peers_synced(self, temp_db, bbs_list_db, monkeypatch):
         db_operations.add_sync_peer("!peer_a", sync_protocol="rsv1", bbs_name="Peer A")
-        storage.upsert_entry("Local BBS", "!local0001", "LOC1", sync_interest="Y", is_local="Y")
+        storage.upsert_entry(
+            "Local BBS",
+            "!local0001",
+            "LOC1",
+            sync_interest="Y",
+            peer_sync="Y",
+            is_local="Y",
+        )
         bbs_list_module.queue_entry_sync("!local0001")
 
         interface = MockMeshInterface()
@@ -211,6 +221,34 @@ class TestBbsListSync:
             interface,
         )
         assert pending == []
+
+    def test_outbound_sync_skips_peer_sync_disabled(self, temp_db, bbs_list_db, monkeypatch):
+        db_operations.add_sync_peer("!peer_a", sync_protocol="rsv1", bbs_name="Peer A")
+        storage.upsert_entry(
+            "Local Only",
+            "!local0002",
+            "LOC2",
+            peer_sync="N",
+            is_local="Y",
+        )
+        bbs_list_module.queue_entry_sync("!local0002")
+
+        interface = MockMeshInterface()
+        interface.module_manager = ModuleManager()
+        self._register(interface.module_manager)
+        db_operations.reload_sync_peers(interface)
+
+        sent = []
+
+        def _fake_send(message, bbs_node, iface, protocol):
+            sent.append((bbs_node, message))
+            return True
+
+        monkeypatch.setattr("bbs_list.module.send_sync_message", _fake_send)
+
+        bbs_list_module.Module()._sync_pending_bbs_list(interface.sync_peers, interface)
+
+        assert sent == []
 
     def test_inbound_sync_accepts_current_wire_type(self, temp_db, bbs_list_db):
         db_operations.add_sync_peer("!peer_a", sync_protocol="rsv1")

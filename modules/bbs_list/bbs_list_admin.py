@@ -35,7 +35,11 @@ def add_entry():
     short_name = admin_ui.input_bold("Short name (4 chars): ").strip()
     location = admin_ui.input_bold("Location (optional): ").strip()
     sync_interest = _normalize_yn(
-        admin_ui.input_bold("Interested in sync arrangements (Y/N) [N]: "),
+        admin_ui.input_bold("Sync interest on mesh list (Y/N) [N]: "),
+        "N",
+    )
+    peer_sync = _normalize_yn(
+        admin_ui.input_bold("Sync this entry to peers (Y/N) [N]: "),
         "N",
     )
     if not board_name or not node_hex or not short_name:
@@ -50,12 +54,14 @@ def add_entry():
         short_name,
         location=location,
         sync_interest=sync_interest,
+        peer_sync=peer_sync,
         is_local="Y",
     )
     if entry_id is None:
         admin_ui.finish_action_message("Could not add BBS entry.", "BBS List : Add Entry")
         return
-    bbs_list_module.queue_entry_sync(node_hex)
+    if peer_sync == "Y":
+        bbs_list_module.queue_entry_sync(node_hex)
     admin_ui.finish_action_message(
         f"BBS entry {board_name} added (ID {entry_id}).",
         "BBS List : Add Entry",
@@ -72,7 +78,11 @@ def register_this_bbs():
     short_name = admin_ui.input_bold(f"Short name (4 chars) [{short_default}]: ").strip() or short_default
     location = admin_ui.input_bold("Location (optional): ").strip()
     sync_interest = _normalize_yn(
-        admin_ui.input_bold("Interested in sync arrangements (Y/N) [Y]: "),
+        admin_ui.input_bold("Sync interest on mesh list (Y/N) [Y]: "),
+        "Y",
+    )
+    peer_sync = _normalize_yn(
+        admin_ui.input_bold("Sync this entry to peers (Y/N) [Y]: "),
         "Y",
     )
     if not node_hex or not short_name:
@@ -87,6 +97,7 @@ def register_this_bbs():
         short_name,
         location=location,
         sync_interest=sync_interest,
+        peer_sync=peer_sync,
         is_local="Y",
     )
     if entry_id is None:
@@ -95,7 +106,8 @@ def register_this_bbs():
             "BBS List : Register This BBS",
         )
         return
-    bbs_list_module.queue_entry_sync(node_hex)
+    if peer_sync == "Y":
+        bbs_list_module.queue_entry_sync(node_hex)
     admin_ui.finish_action_message(
         f"This BBS ({board_name}) registered in the directory (ID {entry_id}).",
         "BBS List : Register This BBS",
@@ -126,8 +138,12 @@ def edit_entry():
     short_name = admin_ui.input_bold(f"Short name [{entry['short_name']}]: ").strip()
     location = admin_ui.input_bold(f"Location [{entry['location'] or ''}]: ").strip()
     sync_interest = _normalize_yn(
-        admin_ui.input_bold(f"Sync interest (Y/N) [{entry['sync_interest']}]: "),
+        admin_ui.input_bold(f"Sync interest on mesh list (Y/N) [{entry['sync_interest']}]: "),
         entry["sync_interest"],
+    )
+    peer_sync = _normalize_yn(
+        admin_ui.input_bold(f"Sync this entry to peers (Y/N) [{entry['peer_sync']}]: "),
+        entry["peer_sync"],
     )
     updated_id = storage.upsert_entry(
         board_name or entry["board_name"],
@@ -135,12 +151,14 @@ def edit_entry():
         short_name or entry["short_name"],
         location=location if location else entry["location"],
         sync_interest=sync_interest,
+        peer_sync=peer_sync,
         is_local=entry["is_local"],
     )
     if updated_id is None:
         admin_ui.finish_action_message("Could not update BBS entry.", "BBS List : Edit Entry")
         return
-    bbs_list_module.queue_entry_sync(entry["node_hex"])
+    if peer_sync == "Y":
+        bbs_list_module.queue_entry_sync(entry["node_hex"])
     admin_ui.finish_action_message(
         f"BBS entry ID {updated_id} updated.",
         "BBS List : Edit Entry",

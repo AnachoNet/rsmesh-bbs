@@ -83,13 +83,87 @@ def begin_form_screen(page_title):
     begin_data_display(page_title)
 
 
+def wrap_message_text(text, max_width):
+    """Wrap a single line of plain text to fit within max_width (word-aware)."""
+    if max_width <= 0:
+        return [text or ""]
+    text = text or ""
+    if len(text) <= max_width:
+        return [text]
+
+    lines = []
+    words = text.split()
+    current = []
+    current_len = 0
+
+    def flush():
+        nonlocal current, current_len
+        if current:
+            lines.append(" ".join(current))
+            current = []
+            current_len = 0
+
+    def append_chunk(chunk):
+        for start in range(0, len(chunk), max_width):
+            lines.append(chunk[start : start + max_width])
+
+    for word in words:
+        if len(word) > max_width:
+            flush()
+            append_chunk(word)
+            continue
+        if not current:
+            current = [word]
+            current_len = len(word)
+            continue
+        candidate = current_len + 1 + len(word)
+        if candidate <= max_width:
+            current.append(word)
+            current_len = candidate
+        else:
+            flush()
+            current = [word]
+            current_len = len(word)
+    flush()
+    return lines or [""]
+
+
+def message_lines_for_display(
+    message,
+    indent=MENU_OPTION_INDENT,
+    width=DISPLAY_COLUMNS,
+):
+    """Return display lines for a message, wrapped to the admin screen width."""
+    prefix = " " * indent
+    max_text_width = max(1, width - indent)
+    display_lines = []
+    raw_lines = (message or "").splitlines()
+    if not raw_lines:
+        raw_lines = [""]
+    for raw in raw_lines:
+        if raw == "":
+            display_lines.append(None)
+            continue
+        for wrapped in wrap_message_text(raw, max_text_width):
+            display_lines.append(prefix + wrapped)
+    return display_lines
+
+
+def render_message_body(message):
+    """Print a message using the standard admin indent and line wrapping."""
+    for line in message_lines_for_display(message):
+        if line is None:
+            console.print()
+        else:
+            print_bold(line)
+
+
 def finish_action_message(message, page_title):
     clear_screen()
     begin_data_display(page_title)
-    message_lines = message.splitlines() or [""]
-    for line in message_lines:
-        _print_no_data(line)
-    lines_used = PAGE_HEADER_LINE_COUNT + len(message_lines)
+    display_lines = message_lines_for_display(message)
+    render_message_body(message)
+    lines_used = PAGE_HEADER_LINE_COUNT + len(display_lines)
     _pad_to_line(MENU_SEPARATOR_LINE, lines_used)
     print_separator()
 
@@ -109,7 +183,7 @@ def _render_display_lines(lines):
 
 
 def _print_no_data(message):
-    print_bold(" " * MENU_OPTION_INDENT + message)
+    render_message_body(message)
 
 
 def _pad_to_line(target_line, lines_used):
