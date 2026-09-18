@@ -52,6 +52,7 @@ Operator reference for running and configuring RSMesh BBS: the mesh client simul
   - [Sync Peers](#sync-peers)
     - [List Sync Peers — fields per peer](#list-sync-peers--fields-per-peer)
     - [Add / Edit Sync Peer — prompts](#add--edit-sync-peer--prompts)
+    - [Request Resync](#request-resync)
     - [List Unsynced Data](#list-unsynced-data)
   - [Modules](#modules)
     - [List Modules — per module (2 lines)](#list-modules--per-module-2-lines)
@@ -656,7 +657,8 @@ Configure remote BBS nodes for bulletin, mail, channel, and mesh-node synchroniz
 | `2` | Add Sync Peer |
 | `3` | Edit Sync Peer |
 | `4` | Delete Sync Peer |
-| `5` | List Unsynced Data |
+| `5` | Request Resync (**rsv1** only) |
+| `6` | List Unsynced Data |
 | `0` | Back |
 
 #### List Sync Peers — fields per peer
@@ -665,7 +667,7 @@ Configure remote BBS nodes for bulletin, mail, channel, and mesh-node synchroniz
 
 **Line 2:** `In: bulletins {Y/N}  channels {Y/N}  Out: bulletins {Y/N}  channels {Y/N}`
 
-**Line 3:** `Mail: {Y/N}  Mesh nodes: {Y/N}  Modules: {Y/N}  Last heard: {relative time}` (`Modules: Y` when rsv1 per-module sync flags are stored; `N` otherwise)
+**Line 3:** `Mail: {Y/N}  Mesh nodes: {Y/N}  Modules: {Y/N}  Resync: {Y/N}  Last heard: {relative time}` (`Modules: Y` when rsv1 per-module sync flags are stored; `N` otherwise). **`Resync: Y`** means this board will honor **`RESYNC_REQUEST`** from that peer (see [Request Resync](#request-resync)).
 
 **Line 4 (optional, rsv1 only):** `Modules: {Name} out=N, {Name} in=N` — shown only when a module sync restriction is set for this peer (default allow omits the line).
 
@@ -677,6 +679,7 @@ RS version alerts appear when a peer sends a sync wire version that does not mat
 |--------|---------|----------------------|
 | `BBS node (e.g. !17d7e4b7):` | — | Required Meshtastic node ID |
 | `BBS name (optional):` | empty | Display name for lists |
+| `Allow resync (Y/N) [Y]:` | Y | When **`Y`**, this peer may send **`RESYNC_REQUEST`** and your server will replay outbound sync to them (rate-limited). Set **`N`** on untrusted or airtime-sensitive peers. **rsv1** only in practice; tc2 never sends resync requests. |
 | `Sync protocol (tc2/rsv1) [tc2]:` | `tc2` | **`tc2`** or **`rsv1`** |
 | `Sync bulletins out (Y/N) [Y]:` | Y | Send bulletins to this peer |
 | `Sync mail in/out (Y/N) [Y]:` | Y | Bidirectional mail sync |
@@ -692,9 +695,21 @@ Module sync prompts appear only when the peer protocol is **`rsv1`** and at leas
 
 **Protocol behavior:**
 - **`tc2`** — TC²-compatible pipe-delimited sync (`BULLETIN|`, `MAIL|`, etc.). Maintains TC²-BBS-mesh conventions: bulletin sync is **create-only** (duplicate `unique_id` ingests are skipped; pin/edit updates are **not** sent). Mesh node sync is forced to **`N`**. Messages must fit in one 200-byte packet.
-- **`rsv1`** — RS wire format (`RS|1|TYPE|{json}`). Supports bulletin **upsert** by `unique_id` (edits and **Pinned** changes propagate), chunked oversized payloads, batched **mesh nodes** (`NODES`) sync, module sync wire types, and RS version negotiation. See [Sync wire formats](RSMESH-BBS-DEVELOPER-GUIDE.md#sync-wire-formats) and [rsv1 message examples](RSMESH-BBS-DEVELOPER-GUIDE.md#rsv1-sync-message-examples).
+- **`rsv1`** — RS wire format (`RS|1|TYPE|{json}`). Supports bulletin **upsert** by `unique_id` (edits and **Pinned** changes propagate), chunked oversized payloads, batched **mesh nodes** (`NODES`) sync, module sync wire types, **origin-aware delete reconcile** (peer deletes apply only to records ingested from sync), **`RESYNC_REQUEST`** replay, and RS version negotiation. See [Sync wire formats](RSMESH-BBS-DEVELOPER-GUIDE.md#sync-wire-formats) and [rsv1 message examples](RSMESH-BBS-DEVELOPER-GUIDE.md#rsv1-sync-message-examples).
 
 Duplicate `bbs_node` values are rejected on add.
+
+#### Request Resync
+
+**Administration → Sync Peers → Request Resync** (menu option **`5`**). Lists **enabled rsv1** sync peers only.
+
+Select: `Enter sync peer ID to request resync from or X=cancel:`
+
+The admin tool **queues** the request in the database; the **running BBS server** sends `RS|1|RESYNC_REQUEST|{}` to that peer on a later sync worker cycle. The admin tool does not require a radio connection.
+
+**On the remote board:** the server looks up your node in its sync peers and checks **`Allow resync`** for your row. If **`N`**, the request is ignored. If **`Y`**, the remote replays outbound data to you for each type enabled on **their** peer row for you (bulletins, mail, published channels, mesh nodes, modules), **rate-limited** so normal traffic is not flooded.
+
+Use this after outages or config changes when you need a full refresh from a trusted **rsv1** peer. Set **`Allow resync: N`** on peers that should not pull large replays from you. **tc2** peers are not listed and never participate in resync.
 
 #### List Unsynced Data
 
@@ -781,9 +796,11 @@ List view groups bulletins by board in order: Urgent, General, News, Info (other
 ### List Bulletins — per entry (2 lines)
 
 - `ID, Poster, Subject, Date`
-- `UID, Del: {Y/N}, Pinned: {Y/N}, Reconcile: {Y/N}, Sync: {label}`
+- `UID, Origin: {local/sync}, Del: {Y/N}, Pinned: {Y/N}, Reconcile: {Y/N}, Sync: {label}`
 
-**Detail view fields:** ID, Board, Poster, Date, Subject, Content, Unique ID, Deleted, Pinned, Delete Reconcile, Sync
+**Origin:** **`local`** — created on this board (admin or mesh). **`sync`** — ingested from a sync peer. Peer delete sync affects **`sync`** bulletins only (see [Review Reconcile Bulletins](#review-reconcile-bulletins)).
+
+**Detail view fields:** ID, Board, Poster, Date, Subject, Content, Unique ID, Origin, Deleted, Pinned, Delete Reconcile, Sync
 
 ### Add Bulletin
 
@@ -814,7 +831,7 @@ Soft delete (`deleted='Y'`). The running BBS server purges and syncs deletes to 
 
 ### Review Reconcile Bulletins
 
-Lists bulletins with `delete_reconcile='Y'` pending operator review after a peer delete sync.
+Lists bulletins with `delete_reconcile='Y'` pending operator review after a sync peer deleted a bulletin that was **ingested from sync** (`Origin: sync`). Peer deletes of **local** bulletins do not appear here.
 
 Select: `Enter bulletin ID or X=cancel:`
 
@@ -822,7 +839,7 @@ Action prompt: **`[R]estore bulletin [D]elete permanently [X] cancel:`**
 
 | Input | Effect |
 |-------|--------|
-| `R` | Restore (clear deleted and reconcile flags) |
+| `R` | Restore (clear deleted and reconcile flags; **Origin** becomes **local** so future peer deletes are ignored) |
 | `D` | Permanently delete |
 | `X` | Cancel |
 
@@ -846,9 +863,11 @@ Channels added through the admin tool default to **published** (`publish=Y`) and
 ### List Channels — per entry (2 lines)
 
 - `ID, Name, Sync: {label}, Publish: {Y/N}`
-- `PSK, Del: {Y/N}, Reconcile: {Y/N}`
+- `PSK, Origin: {local/sync}, Del: {Y/N}, Reconcile: {Y/N}`
 
-**Detail view fields:** ID, Name, PSK, Publish, Unique ID, Deleted, Delete Reconcile, Sync
+**Origin:** same meaning as bulletins — peer **`DELETE_CHANNEL`** reconcile applies only to **`sync`** channels.
+
+**Detail view fields:** ID, Name, PSK, Publish, Unique ID, Origin, Deleted, Delete Reconcile, Sync
 
 ### Add Channel
 
@@ -895,7 +914,7 @@ Import summary reports Inserted, Updated, Unchanged, and Skipped rows (up to 5 e
 
 ### Review Reconcile Channels
 
-Same workflow as bulletin reconcile. Action prompt: **`[R]estore channel [D]elete permanently [X] cancel:`**
+Same workflow as [Review Reconcile Bulletins](#review-reconcile-bulletins) for channels ingested from sync. Action prompt: **`[R]estore channel [D]elete permanently [X] cancel:`** — **Restore** sets **Origin** to **local**.
 
 ---
 
@@ -1163,7 +1182,9 @@ Meshtastic hex node IDs with a leading `!`, for example `!9e9d8704` or `!17d7e4b
 
 ### Reconcile workflow
 
-When a sync peer deletes a bulletin or channel that was **ingested from sync**, the local copy is soft-deleted and marked `delete_reconcile='Y'` instead of being removed immediately. Use **Review Reconcile** under Bulletins or Channels to restore (keeps the post and treats it as locally owned) or permanently delete. Peer deletes of **locally created** bulletins or channels do not change your copy. Mail peer deletes are always immediate.
+When a sync peer deletes a bulletin or channel that was **ingested from sync** (**Origin: sync**), the local copy is soft-deleted and marked `delete_reconcile='Y'` instead of being removed immediately. Use **Review Reconcile** under Bulletins or Channels to restore (keeps the post and sets **Origin: local**) or permanently delete. Peer deletes of **locally created** bulletins or channels (**Origin: local**) do not change your copy. Mail peer deletes are always immediate (no reconcile).
+
+**Resync:** See [Request Resync](#request-resync) under Sync Peers (**rsv1**). Control acceptance with **Allow resync** on each sync-peer row.
 
 ### Complete menu tree
 
