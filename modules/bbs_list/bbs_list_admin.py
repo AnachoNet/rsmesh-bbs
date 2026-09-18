@@ -1,5 +1,6 @@
 from rsmesh_bbs import admin_ui
 from rsmesh_bbs.bbs_info import get_bbs_info
+from rsmesh_bbs.module_loader import MODULES_DIR
 
 from bbs_list import module as bbs_list_module
 from bbs_list import storage
@@ -8,6 +9,32 @@ from bbs_list import storage
 def _normalize_yn(value, default="N"):
     text = (value or default).strip().upper()
     return "Y" if text == "Y" else "N"
+
+
+def _peer_sync_default(entry):
+    if entry is None:
+        return "N"
+    return storage.normalize_peer_sync(entry.get("peer_sync", "Y"))
+
+
+def _prompt_mesh_and_peer_sync(entry=None, *, mesh_default="N", peer_default=None):
+    if peer_default is None:
+        peer_default = _peer_sync_default(entry) if entry else "N"
+    mesh_key = "sync_interest" if entry else None
+    mesh_current = entry[mesh_key] if entry else mesh_default
+    sync_interest = _normalize_yn(
+        admin_ui.input_bold(
+            f"Sync interest on mesh list (Y/N) [{mesh_current}]: "
+            if entry
+            else "Sync interest on mesh list (Y/N) [N]: "
+        ),
+        mesh_current if entry else mesh_default,
+    )
+    peer_sync = _normalize_yn(
+        admin_ui.input_bold(f"Sync this entry to peers (Y/N) [{peer_default}]: "),
+        peer_default,
+    )
+    return sync_interest, peer_sync
 
 
 def list_entries():
@@ -34,14 +61,7 @@ def add_entry():
     node_hex = admin_ui.input_bold("Node hex ID (e.g. !9e9d8704): ").strip()
     short_name = admin_ui.input_bold("Short name (4 chars): ").strip()
     location = admin_ui.input_bold("Location (optional): ").strip()
-    sync_interest = _normalize_yn(
-        admin_ui.input_bold("Sync interest on mesh list (Y/N) [N]: "),
-        "N",
-    )
-    peer_sync = _normalize_yn(
-        admin_ui.input_bold("Sync this entry to peers (Y/N) [N]: "),
-        "N",
-    )
+    sync_interest, peer_sync = _prompt_mesh_and_peer_sync(mesh_default="N", peer_default="N")
     if not board_name or not node_hex or not short_name:
         admin_ui.finish_action_message(
             "Board name, node hex ID, and short name are required.",
@@ -77,14 +97,7 @@ def register_this_bbs():
     node_hex = admin_ui.input_bold(f"Node hex ID for this BBS [{node_default}]: ").strip() or node_default
     short_name = admin_ui.input_bold(f"Short name (4 chars) [{short_default}]: ").strip() or short_default
     location = admin_ui.input_bold("Location (optional): ").strip()
-    sync_interest = _normalize_yn(
-        admin_ui.input_bold("Sync interest on mesh list (Y/N) [Y]: "),
-        "Y",
-    )
-    peer_sync = _normalize_yn(
-        admin_ui.input_bold("Sync this entry to peers (Y/N) [Y]: "),
-        "Y",
-    )
+    sync_interest, peer_sync = _prompt_mesh_and_peer_sync(mesh_default="Y", peer_default="Y")
     if not node_hex or not short_name:
         admin_ui.finish_action_message(
             "Node hex ID and short name are required.",
@@ -134,17 +147,15 @@ def edit_entry():
         return
 
     admin_ui.begin_form_screen("BBS List : Edit Entry")
+    admin_ui.print_bold(
+        f"Node: {entry['node_hex']}  peer sync: {_peer_sync_default(entry)}  "
+        f"sync interest: {entry['sync_interest']}"
+    )
+    admin_ui.print_bold("Press Enter to keep the current value.")
     board_name = admin_ui.input_bold(f"Board name [{entry['board_name']}]: ").strip()
     short_name = admin_ui.input_bold(f"Short name [{entry['short_name']}]: ").strip()
     location = admin_ui.input_bold(f"Location [{entry['location'] or ''}]: ").strip()
-    sync_interest = _normalize_yn(
-        admin_ui.input_bold(f"Sync interest on mesh list (Y/N) [{entry['sync_interest']}]: "),
-        entry["sync_interest"],
-    )
-    peer_sync = _normalize_yn(
-        admin_ui.input_bold(f"Sync this entry to peers (Y/N) [{entry['peer_sync']}]: "),
-        entry["peer_sync"],
-    )
+    sync_interest, peer_sync = _prompt_mesh_and_peer_sync(entry)
     updated_id = storage.upsert_entry(
         board_name or entry["board_name"],
         entry["node_hex"],
@@ -193,6 +204,8 @@ def delete_entry():
 
 
 def run_admin_menu(run_submenu, back_label="Modules"):
+    storage.configure(MODULES_DIR / "bbs_list")
+    storage.setup_db()
     run_submenu(
         "BBS List",
         [
