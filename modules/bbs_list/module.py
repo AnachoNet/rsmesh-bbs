@@ -18,7 +18,7 @@ from rsmesh_bbs.utils import (
 
 from bbs_list import storage
 
-LIST_MENU_PROMPT = "List: [A]ll  [S]ync-Interested  E[X]IT"
+LIST_MENU_PROMPT = "[A]ll  [S]ync-Interested  E[X]IT"
 BROWSE_FOOTER = "Enter list ID for details. [R]eturn  E[X]IT"
 DETAIL_FOOTER = "[R]eturn  E[X]IT"
 

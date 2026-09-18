@@ -312,7 +312,7 @@ class TestBbsListMeshUi:
         ctx.module_name = "BBS List"
         mod.on_enter("!user01", ctx)
         assert len(ctx.messages) == 1
-        assert "List: [A]ll  [S]ync-Interested  E[X]IT" in ctx.messages[0]
+        assert "[A]ll  [S]ync-Interested  E[X]IT" in ctx.messages[0]
         assert "Enter list ID" not in ctx.messages[0]
 
     def test_list_view_prompts_for_entry_not_list_menu(self, bbs_list_db):
@@ -322,7 +322,7 @@ class TestBbsListMeshUi:
         ctx.module_name = "BBS List"
         mod.on_message("!user01", "a", ctx)
         assert any("Enter list ID for details" in msg for msg in ctx.messages)
-        assert not any("List: [A]ll  [S]ync-Interested" in msg for msg in ctx.messages)
+        assert not any("[A]ll  [S]ync-Interested  E[X]IT" in msg for msg in ctx.messages)
 
     def test_detail_return_shows_list_menu(self, bbs_list_db):
         storage.upsert_entry("Alpha", "!aabbcc01", "ALPH", sync_interest="Y")
@@ -333,5 +333,5 @@ class TestBbsListMeshUi:
         mod.on_message("!user01", "a", ctx)
         mod.on_message("!user01", "1", ctx)
         mod.on_message("!user01", "r", ctx)
-        assert ctx.messages[-1].endswith("List: [A]ll  [S]ync-Interested  E[X]IT")
+        assert ctx.messages[-1].endswith("[A]ll  [S]ync-Interested  E[X]IT")
         assert "[R]eturn  E[X]IT" in ctx.messages[-2]
