@@ -180,6 +180,7 @@ def _upgrade_bulletins_schema(c):
     _add_column_if_missing(c, "bulletins", "delete_reconcile", "TEXT NOT NULL DEFAULT 'N'")
     _add_column_if_missing(c, "bulletins", "synced", "TEXT NOT NULL DEFAULT 'Y'")
     _add_column_if_missing(c, "bulletins", "pinned", "TEXT NOT NULL DEFAULT 'N'")
+    _add_column_if_missing(c, "bulletins", "from_sync", "TEXT NOT NULL DEFAULT 'N'")
 
 
 def _upgrade_mail_schema(c):
@@ -202,6 +203,7 @@ def _upgrade_channels_schema(c):
     _add_column_if_missing(c, "channels", "unique_id", "TEXT")
     _add_column_if_missing(c, "channels", "deleted", "TEXT NOT NULL DEFAULT 'N'")
     _add_column_if_missing(c, "channels", "delete_reconcile", "TEXT NOT NULL DEFAULT 'N'")
+    _add_column_if_missing(c, "channels", "from_sync", "TEXT NOT NULL DEFAULT 'N'")
 
 
 def _node_catalog_public_key_is_nullable(c):
@@ -284,6 +286,7 @@ def _upgrade_sync_peers_schema(c):
     _add_column_if_missing(c, "sync_peers", "rs_version_alert", "TEXT NOT NULL DEFAULT 'N'")
     _add_column_if_missing(c, "sync_peers", "rs_wire_version_seen", "INTEGER")
     _add_column_if_missing(c, "sync_peers", "enabled", "TEXT NOT NULL DEFAULT 'Y'")
+    _add_column_if_missing(c, "sync_peers", "allow_resync", "TEXT NOT NULL DEFAULT 'Y'")
     c.execute(
         "UPDATE sync_peers SET sync_mesh_nodes = 'N' WHERE sync_protocol = 'tc2'"
     )
@@ -313,6 +316,23 @@ def _create_rsmesh_support_tables(c):
                sender_short_name TEXT NOT NULL,
                subject TEXT NOT NULL,
                created TEXT NOT NULL
+           )"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS pending_resync_requests (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               target_bbs_node TEXT NOT NULL,
+               status TEXT NOT NULL DEFAULT 'pending',
+               created TEXT NOT NULL
+           )"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS peer_resync_outbound (
+               requester_bbs_node TEXT NOT NULL PRIMARY KEY,
+               stage TEXT NOT NULL,
+               stage_cursor INTEGER NOT NULL DEFAULT 0,
+               mesh_batch_index INTEGER NOT NULL DEFAULT 0,
+               updated INTEGER NOT NULL
            )"""
     )
     c.execute(

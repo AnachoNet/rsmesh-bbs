@@ -55,10 +55,11 @@ PEER_SYNC_FLAG_COLUMNS = {
 PEER_ROW_SELECT = (
     "id, bbs_node, bbs_name, sync_protocol, last_heard, "
     "sync_bulletins, sync_mail, sync_channels, sync_mesh_nodes, ingest_bulletins, ingest_channels, "
-    "rs_version_alert, rs_wire_version_seen, enabled"
+    "rs_version_alert, rs_wire_version_seen, enabled, allow_resync"
 )
 
 PEER_ENABLED_INDEX = 13
+PEER_ALLOW_RESYNC_INDEX = 14
 
 
 def _peer_id_for_bbs_node(bbs_node):
@@ -651,7 +652,8 @@ def initialize_database(quiet=False):
                     unique_id TEXT NOT NULL,
                     delete_reconcile TEXT NOT NULL DEFAULT 'N',
                     synced TEXT NOT NULL DEFAULT 'N',
-                    pinned TEXT NOT NULL DEFAULT 'N'
+                    pinned TEXT NOT NULL DEFAULT 'N',
+                    from_sync TEXT NOT NULL DEFAULT 'N'
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS mail (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -674,7 +676,8 @@ def initialize_database(quiet=False):
                     synced TEXT NOT NULL DEFAULT 'N',
                     unique_id TEXT,
                     deleted TEXT NOT NULL DEFAULT 'N',
-                    delete_reconcile TEXT NOT NULL DEFAULT 'N'
+                    delete_reconcile TEXT NOT NULL DEFAULT 'N',
+                    from_sync TEXT NOT NULL DEFAULT 'N'
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS sysadmin_nodes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -712,7 +715,8 @@ def initialize_database(quiet=False):
                     ingest_channels TEXT NOT NULL DEFAULT 'Y',
                     rs_version_alert TEXT NOT NULL DEFAULT 'N',
                     rs_wire_version_seen INTEGER,
-                    enabled TEXT NOT NULL DEFAULT 'Y'
+                    enabled TEXT NOT NULL DEFAULT 'Y',
+                    allow_resync TEXT NOT NULL DEFAULT 'Y'
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS sys_config (
                     cfg_section TEXT NOT NULL,
@@ -1703,6 +1707,7 @@ def add_sync_peer(
     ingest_bulletins='Y',
     ingest_channels='Y',
     enabled='Y',
+    allow_resync='Y',
 ):
     bbs_node = (bbs_node or '').strip()
     bbs_name = (bbs_name or '').strip() or None
@@ -1714,6 +1719,7 @@ def add_sync_peer(
     ingest_bulletins = _normalize_sync_flag(ingest_bulletins)
     ingest_channels = _normalize_sync_flag(ingest_channels)
     enabled = _normalize_sync_flag(enabled)
+    allow_resync = _normalize_sync_flag(allow_resync)
     if not bbs_node or not sync_protocol:
         return False
 
@@ -1723,12 +1729,12 @@ def add_sync_peer(
         c.execute(
             "INSERT INTO sync_peers "
             "(bbs_node, bbs_name, sync_protocol, last_heard, sync_bulletins, sync_mail, sync_channels, "
-            "sync_mesh_nodes, ingest_bulletins, ingest_channels, enabled) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "sync_mesh_nodes, ingest_bulletins, ingest_channels, enabled, allow_resync) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 bbs_node, bbs_name, sync_protocol, int(time.time()),
                 sync_bulletins, sync_mail, sync_channels, sync_mesh_nodes,
-                ingest_bulletins, ingest_channels, enabled,
+                ingest_bulletins, ingest_channels, enabled, allow_resync,
             ),
         )
         conn.commit()
@@ -1779,6 +1785,7 @@ def update_sync_peer(
     ingest_bulletins='Y',
     ingest_channels='Y',
     enabled='Y',
+    allow_resync='Y',
 ):
     bbs_node = (bbs_node or '').strip()
     bbs_name = (bbs_name or '').strip() or None
@@ -1790,6 +1797,7 @@ def update_sync_peer(
     ingest_bulletins = _normalize_sync_flag(ingest_bulletins)
     ingest_channels = _normalize_sync_flag(ingest_channels)
     enabled = _normalize_sync_flag(enabled)
+    allow_resync = _normalize_sync_flag(allow_resync)
     if not peer_id or not bbs_node or not sync_protocol:
         return False
 
@@ -1799,12 +1807,12 @@ def update_sync_peer(
         c.execute(
             "UPDATE sync_peers SET bbs_node = ?, bbs_name = ?, sync_protocol = ?, last_heard = ?, "
             "sync_bulletins = ?, sync_mail = ?, sync_channels = ?, sync_mesh_nodes = ?, "
-            "ingest_bulletins = ?, ingest_channels = ?, enabled = ?, rs_version_alert = 'N', "
-            "rs_wire_version_seen = NULL WHERE id = ?",
+            "ingest_bulletins = ?, ingest_channels = ?, enabled = ?, allow_resync = ?, "
+            "rs_version_alert = 'N', rs_wire_version_seen = NULL WHERE id = ?",
             (
                 bbs_node, bbs_name, sync_protocol, int(time.time()),
                 sync_bulletins, sync_mail, sync_channels, sync_mesh_nodes,
-                ingest_bulletins, ingest_channels, enabled, peer_id,
+                ingest_bulletins, ingest_channels, enabled, allow_resync, peer_id,
             ),
         )
         conn.commit()
@@ -1877,10 +1885,12 @@ def add_channel(
             return existing[0]
 
     synced = 'Y' if from_sync else 'N'
+    origin_sync = 'Y' if from_sync else 'N'
     try:
         c.execute(
-            "INSERT INTO channels (name, psk, publish, synced, unique_id) VALUES (?, ?, ?, ?, ?)",
-            (name, psk, publish, synced, unique_id),
+            "INSERT INTO channels (name, psk, publish, synced, unique_id, from_sync) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (name, psk, publish, synced, unique_id, origin_sync),
         )
     except sqlite3.IntegrityError:
         c.execute(
@@ -2537,7 +2547,7 @@ def _mark_channel_for_reconcile(channel_id):
     c = conn.cursor()
     c.execute(
         "UPDATE channels SET deleted = 'Y', delete_reconcile = 'Y' "
-        "WHERE id = ? AND deleted = 'N'",
+        "WHERE id = ? AND delete_reconcile != 'Y'",
         (channel_id,),
     )
     conn.commit()
@@ -2552,14 +2562,25 @@ def mark_channel_for_reconcile_by_sync(unique_id, sender_node_id=None):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id FROM channels WHERE unique_id = ? AND deleted = 'N'",
+        "SELECT id, from_sync, delete_reconcile FROM channels WHERE unique_id = ?",
         (unique_id,),
     )
     row = c.fetchone()
     if row is None:
         return False
 
-    channel_id = row[0]
+    channel_id, from_sync, delete_reconcile = row[0], row[1], row[2]
+    if from_sync != 'Y':
+        logging.info(
+            "Ignoring DELETE_CHANNEL from peer %s for locally originated channel "
+            "(unique_id: %s).",
+            sender_node_id,
+            unique_id,
+        )
+        return False
+    if delete_reconcile == 'Y':
+        return False
+
     marked = _mark_channel_for_reconcile(channel_id)
     if marked:
         logging.info(
@@ -2583,7 +2604,7 @@ def restore_reconcile_channel(channel_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "UPDATE channels SET deleted = 'N', delete_reconcile = 'N' "
+        "UPDATE channels SET deleted = 'N', delete_reconcile = 'N', from_sync = 'N' "
         "WHERE id = ? AND delete_reconcile = 'Y'",
         (channel_id,),
     )
@@ -2752,8 +2773,8 @@ def ingest_bulletin_from_rsv1_sync(
         date = datetime.now().strftime("%Y-%m-%d %H:%M")
         c.execute(
             "INSERT INTO bulletins "
-            "(board, sender_short_name, date, subject, content, unique_id, synced, pinned) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'Y', ?)",
+            "(board, sender_short_name, date, subject, content, unique_id, synced, pinned, from_sync) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'Y', ?, 'Y')",
             (board, sender_short_name, date, subject, content, unique_id, pinned),
         )
         conn.commit()
@@ -2796,10 +2817,13 @@ def add_bulletin(board, sender_short_name, subject, content, bbs_nodes, interfac
         return unique_id
 
     synced = 'Y' if from_sync else 'N'
+    origin_sync = 'Y' if from_sync else 'N'
     c.execute(
-        "INSERT INTO bulletins (board, sender_short_name, date, subject, content, unique_id, synced) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (board, sender_short_name, date, subject, content, unique_id, synced))
+        "INSERT INTO bulletins "
+        "(board, sender_short_name, date, subject, content, unique_id, synced, from_sync) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (board, sender_short_name, date, subject, content, unique_id, synced, origin_sync),
+    )
     conn.commit()
 
     if from_sync:
@@ -2994,11 +3018,46 @@ def _mark_bulletin_for_reconcile(bulletin_id):
     c = conn.cursor()
     c.execute(
         "UPDATE bulletins SET deleted = 'Y', delete_reconcile = 'Y' "
-        "WHERE id = ? AND deleted = 'N'",
-        (bulletin_id,)
+        "WHERE id = ? AND delete_reconcile != 'Y'",
+        (bulletin_id,),
     )
     conn.commit()
     return c.rowcount > 0
+
+
+def _apply_peer_bulletin_delete(bulletin_id, sender_node_id=None, identifier=None):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT from_sync, delete_reconcile FROM bulletins WHERE id = ?",
+        (bulletin_id,),
+    )
+    row = c.fetchone()
+    if row is None:
+        return False
+    from_sync, delete_reconcile = row[0], row[1]
+    if from_sync != 'Y':
+        logging.info(
+            "Ignoring peer bulletin delete from %s for locally originated bulletin %s "
+            "(identifier: %s).",
+            sender_node_id,
+            bulletin_id,
+            identifier,
+        )
+        return False
+    if delete_reconcile == 'Y':
+        return False
+
+    marked = _mark_bulletin_for_reconcile(bulletin_id)
+    if marked:
+        logging.info(
+            "Marked bulletin %s for reconcile after delete sync from peer %s "
+            "(identifier: %s).",
+            bulletin_id,
+            sender_node_id,
+            identifier,
+        )
+    return marked
 
 
 def get_reconcile_bulletins():
@@ -3015,9 +3074,9 @@ def restore_reconcile_bulletin(bulletin_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "UPDATE bulletins SET deleted = 'N', delete_reconcile = 'N' "
+        "UPDATE bulletins SET deleted = 'N', delete_reconcile = 'N', from_sync = 'N' "
         "WHERE id = ? AND delete_reconcile = 'Y'",
-        (bulletin_id,)
+        (bulletin_id,),
     )
     conn.commit()
     return c.rowcount > 0
@@ -3091,16 +3150,8 @@ def delete_bulletin_by_sync_identifier(identifier, sender_node_id=None):
     if not identifier:
         return False
 
-    protocol = get_sync_protocol_for_peer(sender_node_id) or 'tc2'
     conn = get_db_connection()
     c = conn.cursor()
-
-    from .sync_wire import is_rs_sync_protocol
-
-    if is_rs_sync_protocol(protocol) and _is_uuid(identifier):
-        c.execute("DELETE FROM bulletins WHERE unique_id = ?", (identifier,))
-        conn.commit()
-        return c.rowcount > 0
 
     bulletin_id = None
     if _is_uuid(identifier):
@@ -3118,13 +3169,7 @@ def delete_bulletin_by_sync_identifier(identifier, sender_node_id=None):
         if c.fetchone() is None:
             return False
 
-    marked = _mark_bulletin_for_reconcile(bulletin_id)
-    if marked:
-        logging.info(
-            f"Marked bulletin {bulletin_id} for reconcile after tc2 delete sync "
-            f"from peer {sender_node_id} (identifier: {identifier})."
-        )
-    return marked
+    return _apply_peer_bulletin_delete(bulletin_id, sender_node_id, identifier)
 
 
 def _is_uuid(value):

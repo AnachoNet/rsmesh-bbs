@@ -174,6 +174,12 @@ def main():
             try:
                 reload_sync_peers(interface)
                 reload_admin_nodes(interface)
+                from rsmesh_bbs.peer_resync import (
+                    advance_resync_outbound,
+                    process_pending_resync_requests,
+                )
+
+                process_pending_resync_requests(interface)
                 sync_pending_records(interface.sync_peers, interface)
                 logging.info(
                     "Waiting %s seconds before mesh nodes sync.",
@@ -181,6 +187,7 @@ def main():
                 )
                 time.sleep(MESH_NODE_SYNC_DELAY_SECONDS)
                 sync_mesh_nodes_to_peers(interface.sync_peers, interface)
+                advance_resync_outbound(interface, max_steps=3)
             except Exception as e:
                 logging.error(f"Error syncing pending records: {e}")
             elapsed = time.time() - cycle_start

@@ -240,12 +240,16 @@ def begin_form_screen(page_title):
     clear_screen()
     begin_data_display(page_title)
 
+def _format_record_origin(from_sync):
+    return "sync" if (from_sync or "N").strip().upper() == "Y" else "local"
+
+
 def _fetch_bulletins():
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, board, sender_short_name, date, subject, deleted, unique_id, delete_reconcile, synced, pinned "
-        "FROM bulletins"
+        "SELECT id, board, sender_short_name, date, subject, deleted, unique_id, delete_reconcile, "
+        "synced, pinned, from_sync FROM bulletins"
     )
     return c.fetchall()
 
@@ -261,7 +265,19 @@ def _group_bulletins_by_board(bulletins):
     return grouped, other
 
 def _bulletin_entry_lines(bulletin):
-    bulletin_id, _board, poster, date, subject, deleted, unique_id, reconcile, _synced, pinned = bulletin
+    (
+        bulletin_id,
+        _board,
+        poster,
+        date,
+        subject,
+        deleted,
+        unique_id,
+        reconcile,
+        _synced,
+        pinned,
+        from_sync,
+    ) = bulletin
     sync_label = get_sync_status_label('bulletins', unique_id)
     return [
         "  " + join_display_fields(
@@ -272,6 +288,7 @@ def _bulletin_entry_lines(bulletin):
         ),
         "    " + join_display_fields(
             f"UID: {unique_id}",
+            f"Origin: {_format_record_origin(from_sync)}",
             f"Del: {deleted}",
             f"Pinned: {pinned or 'N'}",
             f"Reconcile: {reconcile}",
@@ -313,8 +330,8 @@ def _fetch_bulletin_entry(bulletin_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, board, sender_short_name, date, subject, content, deleted, unique_id, delete_reconcile, pinned "
-        "FROM bulletins WHERE id = ?",
+        "SELECT id, board, sender_short_name, date, subject, content, deleted, unique_id, "
+        "delete_reconcile, pinned, from_sync FROM bulletins WHERE id = ?",
         (bulletin_id,),
     )
     return c.fetchone()
@@ -328,7 +345,19 @@ def _display_bulletin_detail(bulletin_id):
             f"Bulletin {bulletin_id} not found.",
         )
         return
-    bulletin_id, board, sender_short_name, date, subject, content, deleted, unique_id, delete_reconcile, pinned = row
+    (
+        bulletin_id,
+        board,
+        sender_short_name,
+        date,
+        subject,
+        content,
+        deleted,
+        unique_id,
+        delete_reconcile,
+        pinned,
+        from_sync,
+    ) = row
     sync_label = get_sync_status_label('bulletins', unique_id)
     detail_lines = _record_detail_lines((
         ("ID", bulletin_id),
@@ -338,6 +367,7 @@ def _display_bulletin_detail(bulletin_id):
         ("Subject", subject),
         ("Content", content),
         ("Unique ID", unique_id),
+        ("Origin", _format_record_origin(from_sync)),
         ("Deleted", deleted),
         ("Pinned", pinned or 'N'),
         ("Delete Reconcile", delete_reconcile),
@@ -430,13 +460,13 @@ def _fetch_channels():
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, name, psk, synced, publish, unique_id, deleted, delete_reconcile "
+        "SELECT id, name, psk, synced, publish, unique_id, deleted, delete_reconcile, from_sync "
         "FROM channels"
     )
     return c.fetchall()
 
 def _channel_entry_lines(channel):
-    channel_id, name, psk, _synced, publish, unique_id, deleted, reconcile = channel
+    channel_id, name, psk, _synced, publish, unique_id, deleted, reconcile, from_sync = channel
     sync_label = '*' if publish == 'N' else get_sync_status_label('channels', unique_id)
     return [
         join_display_fields(
@@ -447,6 +477,7 @@ def _channel_entry_lines(channel):
         ),
         "    " + join_display_fields(
             f"PSK: {psk}",
+            f"Origin: {_format_record_origin(from_sync)}",
             f"Del: {deleted}",
             f"Reconcile: {reconcile}",
         ),
@@ -472,7 +503,8 @@ def _fetch_channel_entry(channel_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, name, psk, synced, publish, unique_id, deleted, delete_reconcile FROM channels WHERE id = ?",
+        "SELECT id, name, psk, synced, publish, unique_id, deleted, delete_reconcile, from_sync "
+        "FROM channels WHERE id = ?",
         (channel_id,),
     )
     return c.fetchone()
@@ -486,7 +518,7 @@ def _display_channel_detail(channel_id):
             f"Channel {channel_id} not found.",
         )
         return
-    channel_id, name, psk, _synced, publish, unique_id, deleted, delete_reconcile = row
+    channel_id, name, psk, _synced, publish, unique_id, deleted, delete_reconcile, from_sync = row
     sync_label = '*' if publish == 'N' else get_sync_status_label('channels', unique_id)
     detail_lines = _record_detail_lines((
         ("ID", channel_id),
@@ -494,6 +526,7 @@ def _display_channel_detail(channel_id):
         ("PSK", psk),
         ("Publish", publish),
         ("Unique ID", unique_id),
+        ("Origin", _format_record_origin(from_sync)),
         ("Deleted", deleted),
         ("Delete Reconcile", delete_reconcile),
         ("Sync", sync_label),
@@ -1347,10 +1380,12 @@ def _sync_peer_flag_lines(peer, last_heard_label=None):
         sync_mesh_nodes = peer[8] if len(peer) > 8 else 'N'
         ingest_bulletins = peer[9] if len(peer) > 9 else 'Y'
         ingest_channels = peer[10] if len(peer) > 10 else 'Y'
+    allow_resync = peer[14] if len(peer) > 14 else 'Y'
     mail_line_fields = [
         f"Mail: {sync_mail or 'Y'}",
         f"Mesh nodes: {sync_mesh_nodes or 'N'}",
         f"Modules: {_sync_peer_modules_configured(peer)}",
+        f"Resync: {allow_resync or 'Y'}",
     ]
     if last_heard_label:
         mail_line_fields.append(f"Last heard: {last_heard_label}")
@@ -1402,6 +1437,7 @@ def add_sync_peer_entry():
     begin_form_screen("Add Sync Peer")
     bbs_node = input_bold("BBS node (e.g. !17d7e4b7): ").strip()
     bbs_name = input_bold("BBS name (optional): ").strip() or None
+    allow_resync = _normalize_yn(input_bold("Allow resync (Y/N) [Y]: "), 'Y')
     sync_protocol = input_bold(f"Sync protocol ({'/'.join(SYNC_PROTOCOLS)}) [tc2]: ").strip() or 'tc2'
     sync_bulletins = _normalize_yn(input_bold("Sync bulletins out (Y/N) [Y]: "), 'Y')
     sync_mail = _normalize_yn(input_bold("Sync mail in/out (Y/N) [Y]: "), 'Y')
@@ -1425,6 +1461,7 @@ def add_sync_peer_entry():
         ingest_bulletins=ingest_bulletins,
         ingest_channels=ingest_channels,
         enabled='Y',
+        allow_resync=allow_resync,
     ):
         peer_id = _peer_id_for_bbs_node(bbs_node)
         if peer_id is not None:
@@ -1443,6 +1480,7 @@ def add_sync_peer_entry():
                     ingest_bulletins=ingest_bulletins,
                     ingest_channels=ingest_channels,
                     enabled=enabled,
+                    allow_resync=allow_resync,
                 )
         _finish_action_message(
             f"Sync peer {bbs_node} added with protocol {sync_protocol}.",
@@ -1483,9 +1521,14 @@ def edit_sync_peer_entry():
     ingest_bulletins = current[9] if len(current) > 9 else 'Y'
     ingest_channels = current[10] if len(current) > 10 else 'Y'
     enabled = current[13] if len(current) > 13 else 'Y'
+    allow_resync = current[14] if len(current) > 14 else 'Y'
     print_bold("Press Enter to keep the current value.")
     bbs_node = input_bold(f"BBS node [{bbs_node}]: ").strip() or bbs_node
     bbs_name = input_bold(f"BBS name [{bbs_name or ''}]: ").strip() or bbs_name
+    allow_resync = _normalize_yn(
+        input_bold(f"Allow resync (Y/N) [{allow_resync}]: "),
+        allow_resync,
+    )
     sync_protocol = input_bold(f"Sync protocol ({'/'.join(SYNC_PROTOCOLS)}) [{sync_protocol}]: ").strip() or sync_protocol
     sync_bulletins = _normalize_yn(
         input_bold(f"Sync bulletins out (Y/N) [{sync_bulletins}]: "),
@@ -1531,10 +1574,43 @@ def edit_sync_peer_entry():
         ingest_bulletins=ingest_bulletins,
         ingest_channels=ingest_channels,
         enabled=enabled,
+        allow_resync=allow_resync,
     ):
         _finish_action_message(f"Sync peer {peer_id} updated.", "Edit Sync Peer")
     else:
         _finish_action_message("Could not update sync peer.", "Edit Sync Peer")
+
+def request_resync_from_peer():
+    rsv1_peers = [
+        row for row in get_sync_peers("rsv1")
+        if (row[13] if len(row) > 13 else "Y") == "Y"
+    ]
+    peer_id = _paginate_select(
+        "Request Resync",
+        _sync_peer_lines(rsv1_peers),
+        "No enabled rsv1 sync peers found.",
+        "Enter sync peer ID to request resync from or X=cancel:",
+        "Resync request cancelled.",
+    )
+    if _paginate_select_exit(peer_id):
+        return peer_id
+
+    target = next((row for row in rsv1_peers if str(row[0]) == peer_id), None)
+    if target is None:
+        _finish_action_message("Sync peer not found.", "Request Resync")
+        return
+    from rsmesh_bbs.peer_resync import queue_peer_resync_request
+
+    bbs_node = target[1]
+    if queue_peer_resync_request(bbs_node):
+        _finish_action_message(
+            f"Resync from {bbs_node} queued. The BBS server will send RESYNC_REQUEST "
+            f"when it is running (rsv1 only).",
+            "Request Resync",
+        )
+    else:
+        _finish_action_message("Could not queue resync request.", "Request Resync")
+
 
 def delete_sync_peer_entry():
     peer_id = _paginate_select(
@@ -2065,6 +2141,7 @@ def sync_peers_menu(back_label="Main Menu"):
         ("Add Sync Peer", add_sync_peer_entry),
         ("Edit Sync Peer", edit_sync_peer_entry),
         ("Delete Sync Peer", delete_sync_peer_entry),
+        ("Request Resync", request_resync_from_peer),
         ("List Unsynced Data", list_unsynced_data),
     ], back_label=back_label)
     return False

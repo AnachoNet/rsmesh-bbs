@@ -536,7 +536,7 @@ def get_sync_peers_from_interface(interface, fallback_nodes=None):
         return sync_peers
     if fallback_nodes:
         return [
-            (None, node, None, 'tc2', None, 'Y', 'Y', 'Y', 'N', 'Y', 'Y', 'N', None, 'Y')
+            (None, node, None, 'tc2', None, 'Y', 'Y', 'Y', 'N', 'Y', 'Y', 'N', None, 'Y', 'Y')
             for node in fallback_nodes
         ]
     return []

@@ -298,7 +298,9 @@ Background workers in the running server (intervals from `config.yml` `schedule`
 
 **Soft delete** — Admin **Delete Bulletins** / **Delete Channels** (and mesh sysadmin bulletin delete) set `deleted='Y'`. The purge worker removes them locally and syncs deletes to peers. **List Unsynced Data** in the admin tool shows records still pending peer sync.
 
-**Reconcile** — When a sync peer deletes a bulletin or channel, your copy is marked `delete_reconcile='Y'` until an operator restores or permanently deletes it (**Review Reconcile** menus).
+**Reconcile** — When a sync peer deletes a bulletin or channel that **originated on that peer** (`from_sync` on ingest), your copy is marked `delete_reconcile='Y'` until an operator restores or permanently deletes it (**Review Reconcile** menus). Peer deletes of **locally created** bulletins or channels are ignored so each board keeps independent control. **Restore** clears reconcile and treats the record as local going forward. **Mail** deletes from peers are always applied immediately (no reconcile). Admin list/detail views show **Origin: local** or **Origin: sync**.
+
+**Resync (rsv1 only)** — **Request Resync** under Sync Peers queues a `RESYNC_REQUEST` to the chosen peer; the running server sends it on the next sync cycle. The remote board honors the request only if **Allow resync** is **Y** on its sync-peer row for your node (default **Y**). The remote then replays outbound sync (bulletins, mail, channels, mesh nodes, modules) to you with rate limiting. tc2 peers never send or accept resync requests.
 
 **Sysconfig** — Many `config.yml` values are copied into the `sys_config` table on first run. The admin tool can edit them live; **Export Configuration to config.yml** writes the database values back to `config.yml`.
 
@@ -1161,7 +1163,7 @@ Meshtastic hex node IDs with a leading `!`, for example `!9e9d8704` or `!17d7e4b
 
 ### Reconcile workflow
 
-When a sync peer deletes a bulletin or channel, the local copy is marked `delete_reconcile='Y'` instead of being removed immediately. Use **Review Reconcile** under Bulletins or Channels to restore or permanently delete each pending record.
+When a sync peer deletes a bulletin or channel that was **ingested from sync**, the local copy is soft-deleted and marked `delete_reconcile='Y'` instead of being removed immediately. Use **Review Reconcile** under Bulletins or Channels to restore (keeps the post and treats it as locally owned) or permanently delete. Peer deletes of **locally created** bulletins or channels do not change your copy. Mail peer deletes are always immediate.
 
 ### Complete menu tree
 

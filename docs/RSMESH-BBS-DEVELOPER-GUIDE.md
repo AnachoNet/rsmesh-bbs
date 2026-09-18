@@ -412,7 +412,7 @@ RSMesh BBS supports two peer sync protocol families. Choose the protocol per syn
 | Bulletin ingest | Insert-only by `unique_id` (duplicate ingests skipped) | Upsert by `unique_id` (edits and pin changes propagate) |
 | Pinned bulletins | Not on the wire; pin state is local to each node | `pin` field (`Y`/`N`) in bulletin JSON |
 | Mesh node sync | Not supported | `NODES` batch messages when **Sync mesh nodes** is enabled |
-| Channel delete sync | Reconcile workflow | `DELETE_CHANNEL` by `unique_id` |
+| Bulletin/channel delete sync | Reconcile when `from_sync='Y'`; ignore peer delete for local origin | `DELETE_BULLETIN` / `DELETE_CHANNEL` by `unique_id`; mail deletes are immediate |
 
 **tc2** behavior intentionally tracks TC² standards: bulletin sync is create-only, and features such as pinned posts or bulletin edits after the initial sync are not replicated to tc2 peers.
 
@@ -526,7 +526,7 @@ RS|1|DELETE_BULLETIN|{"uid":"550e8400-e29b-41d4-a716-446655440001"}
 { "uid": "550e8400-e29b-41d4-a716-446655440001" }
 ```
 
-**Notes:** On rsv1 peers, deletes by `uid` directly (no tc2-style reconcile workflow).
+**Notes:** Soft-delete and `delete_reconcile='Y'` when the bulletin was ingested from sync (`from_sync='Y'`). Ignored for locally created bulletins. Restore in admin sets `from_sync='N'`.
 
 #### DELETE_MAIL
 
@@ -552,7 +552,15 @@ RS|1|DELETE_CHANNEL|{"uid":"550e8400-e29b-41d4-a716-446655440003"}
 { "uid": "550e8400-e29b-41d4-a716-446655440003" }
 ```
 
-**Notes:** rsv1-only; triggers reconcile workflow on the receiving peer.
+**Notes:** rsv1-only; reconcile workflow when the channel was ingested from sync. Ignored for locally created channels. Restore in admin sets `from_sync='N'`.
+
+#### RESYNC_REQUEST
+
+Empty JSON payload. Sent by a board that wants the peer to replay outbound sync (core types and modules enabled for that peer). The receiving board checks `allow_resync` on its sync-peer row for the requester; if allowed, it pushes data rate-limited. tc2 peers do not use this message.
+
+```
+RS|1|RESYNC_REQUEST|{}
+```
 
 #### NODES
 

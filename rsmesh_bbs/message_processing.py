@@ -280,6 +280,10 @@ def _process_rs_sync_message(sender_id, message, interface, sender_node_id):
             )
             return
         mark_channel_for_reconcile_by_sync(fields["unique_id"], sender_node_id)
+    elif msg_type == "RESYNC_REQUEST":
+        from .peer_resync import handle_inbound_resync_request
+
+        handle_inbound_resync_request(sender_node_id, interface)
     else:
         raise ValueError(f"Unsupported RS sync message type: {msg_type}")
 

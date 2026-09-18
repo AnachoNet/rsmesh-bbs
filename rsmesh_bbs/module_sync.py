@@ -25,6 +25,7 @@ _CORE_RS_WIRE_TYPES = frozenset({
     "DELETE_BULLETIN",
     "DELETE_MAIL",
     "DELETE_CHANNEL",
+    "RESYNC_REQUEST",
     "CHUNK",
 })
 

@@ -106,6 +106,8 @@ def _decode_rs_v1(msg_type, data):
         return msg_type, {"unique_id": _req_field(data, "uid", "unique id")}
     if msg_type == "DELETE_CHANNEL":
         return msg_type, {"unique_id": _req_field(data, "uid", "unique id")}
+    if msg_type == "RESYNC_REQUEST":
+        return msg_type, {}
     if msg_type == "NODES":
         raw_nodes = data.get("n")
         if not isinstance(raw_nodes, list) or not raw_nodes:
@@ -273,6 +275,13 @@ def encode_delete_channel_sync_message(sync_protocol, unique_id):
     if wire_version is None:
         raise ValueError("DELETE_CHANNEL sync is only supported for RS protocols")
     return build_rs_message(wire_version, "DELETE_CHANNEL", {"uid": unique_id})
+
+
+def encode_resync_request_message(sync_protocol):
+    wire_version = rs_wire_version_for_protocol(sync_protocol)
+    if wire_version is None:
+        raise ValueError("RESYNC_REQUEST is only supported for RS protocols")
+    return build_rs_message(wire_version, "RESYNC_REQUEST", {})
 
 
 def _parse_mesh_node_last_heard(last_heard):
