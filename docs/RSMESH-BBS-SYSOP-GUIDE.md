@@ -854,6 +854,7 @@ Channels added through the admin tool default to **published** (`publish=Y`) and
 |--------|----------|
 | `Channel name:` | Yes |
 | `Channel PSK:` | Yes |
+| `Publish (Y/N) [Y]:` | No (default **Y** — published and eligible for outbound sync) |
 
 ### Edit Channel
 

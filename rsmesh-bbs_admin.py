@@ -643,10 +643,11 @@ def add_channel_entry():
     begin_form_screen("Add Channel")
     name = input_bold("Channel name: ").strip()
     psk = input_bold("Channel PSK: ").strip()
+    publish = _normalize_yn(input_bold("Publish (Y/N) [Y]: "), "Y")
     if not name or not psk:
         _finish_action_message("Channel name and PSK are required.", "Add Channel")
         return
-    add_channel(name, psk)
+    add_channel(name, psk, publish=publish)
     _finish_action_message(f"Channel '{name}' added.", "Add Channel")
 
 def edit_channel_entry():
