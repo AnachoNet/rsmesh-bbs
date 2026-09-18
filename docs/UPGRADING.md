@@ -4,9 +4,14 @@ Release 1.1
 
 ## Upgrading from TC²
 
-RSMesh BBS can migrate a stock [TC²-BBS-Mesh](https://github.com/TheCommsChannel/TC2-BBS-mesh) install on first startup. Complete [Setup (virtual environment)](../README.md#setup-virtual-environment), place your existing TC² files in the project directory, and start the server with the venv activated:
+RSMesh BBS can migrate a stock [TC²-BBS-Mesh](https://github.com/TheCommsChannel/TC2-BBS-mesh) install on first startup. You do **not** copy the whole TC² tree into RSMesh — only these two files from your TC² install need to be placed in the RSMesh BBS project directory (same folder as `rsmesh-bbs_server.py`):
 
-| TC² file | RSMesh BBS handling |
+- **`config.ini`**
+- **`bulletins.db`**
+
+Complete [Setup (virtual environment)](../README.md#setup-virtual-environment), copy those files, and start the server with the venv activated:
+
+| TC² file (copy this only) | RSMesh BBS handling |
 |----------|---------------------|
 | `config.ini` | Converted to `config.yml` if `config.yml` does not already exist |
 | `bulletins.db` | Copied to `rsmesh-bbs.db` if `rsmesh-bbs.db` does not already exist |

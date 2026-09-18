@@ -71,6 +71,21 @@ Open the Channel Directory from the Main Menu with **`C`**.
 
 Open **M[o]dules** from the main menu, then choose a module by its key.
 
+### Fortune (when enabled)
+
+Default menu key **`F`**. A random fortune is sent when you enter the module. Send **any message** for another fortune, then **`E[X]IT`** to return to the main menu.
+
+### Node Info (when enabled)
+
+Default menu key **`I`**. Entry menu: **`[N]odes`**, **`[H]ardware`**, **`[R]oles`**, and **`E[X]IT`**. **SysAdmin** nodes also see **`[L]ist Nodes`**.
+
+- **Nodes** — How many nodes the BBS radio has heard (all time, last 24 hours, last 8 hours, last hour).
+- **Hardware** — Counts grouped by radio hardware model.
+- **Roles** — Counts grouped by Meshtastic role.
+- **List Nodes** (SysAdmin) — Detailed per-node lines (for example signal and location fields when available). Long lists may be split across several mesh packets.
+
+This module is separate from the core **mail** and **channel** features; it is a statistics view built from overheard mesh traffic.
+
 ### BBS List (when enabled)
 
 Default menu key **`L`**. Entry menu: **`[A]ll`**, **`[S]ync-Interested`**, **`E[X]IT`**.
@@ -83,8 +98,6 @@ After a list, **`Enter list ID for details`**, then **`[R]eturn`** to the list-t
 ## Shared Information
 
 Bulletins, channels, and mail you see on a BBS may have been posted on that system or shared from another BBS on the mesh. What is available can vary from one BBS to another.
-
-If a **remote board deletes** a bulletin or channel you still carry, your sysop may see a **reconcile** prompt only for content that **came from sync**. **Posts you (or your sysop) created on this BBS** are not removed just because a peer deleted their copy.
 
 ## SysAdmin Capabilities on the Mesh
 

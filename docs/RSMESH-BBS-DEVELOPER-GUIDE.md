@@ -408,9 +408,9 @@ RSMesh BBS supports two peer sync protocol families. Choose the protocol per syn
 
 | Topic | **tc2** | **rsv1** |
 |-------|---------|----------|
-| On-wire shape | Pipe-delimited (`BULLETIN\|`, `MAIL\|`, …) | `RS\|N\|TYPE\|{json}` only; pipe messages from RS peers are ignored |
+| On-wire shape | Pipe-delimited **tc2** records (for example `BULLETIN`, `MAIL`) | **rsv1** `RS` envelope (version, type, JSON) only; pipe messages from RS peers are ignored |
 | TC² compatibility | Yes — follows TC²-BBS-mesh sync conventions | No — RS peers must also use rsv1 |
-| Packet size | Single mesh packet (200 bytes max) | Chunked `RS\|N\|CHUNK\|{...}` reassembly for oversized payloads |
+| Packet size | Single mesh packet (200 bytes max) | Oversized payloads use `CHUNK` reassembly (see below) |
 | Bulletin ingest | Insert-only by `unique_id` (duplicate ingests skipped) | Upsert by `unique_id` (edits and pin changes propagate) |
 | Pinned bulletins | Not on the wire; pin state is local to each node | `pin` field (`Y`/`N`) in bulletin JSON |
 | Mesh node sync | Not supported | `NODES` batch messages when **Sync mesh nodes** is enabled |
@@ -610,15 +610,17 @@ When a complete `RS|1|…` message exceeds **200 bytes**, it is split into one o
 **Example (chunk 0 of 4 for an oversized BULLETIN):**
 
 ```
-RS|1|CHUNK|{"u":"95f49967-6bc2-4e9c-b970-0eb671154b02","i":0,"n":4,"p":"RS|1|BULLETIN|{\"b\":\"General\",\"sn\":\"OPS\",\"sub\":\"Large post\",\"body\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+RS|1|CHUNK|{"u":"95f49967-6bc2-4e9c-b970-0eb671154b02","i":0,"n":4,"p":"RS|1|BULLETIN|{...}"}
 ```
+
+(`p` is a string fragment of the inner `RS|1|BULLETIN|{...}` message; JSON encoding escapes quotes inside that string on the wire.)
 
 ```json
 {
   "u": "95f49967-6bc2-4e9c-b970-0eb671154b02",
   "i": 0,
   "n": 4,
-  "p": "RS|1|BULLETIN|{\"b\":\"General\",\"sn\":\"OPS\",\"sub\":\"Large post\",\"body\":\"xxxxxxxx..."
+  "p": "RS|1|BULLETIN|{... inner bulletin JSON continues ...}"
 }
 ```
 
