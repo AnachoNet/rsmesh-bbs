@@ -29,3 +29,21 @@ TODO for Release 1.2
     - Edit/Delete by admin tool
     - Allow mesh users to set reminder for event.  Give option to send reminder week before,
       day before, both
+
+- Privileged Users
+    - Gives users/devices access to special functions on board
+    - Similar to sysadmin table
+    - Module can only be selected by user with handset node id in priv table
+    - Operator can delegate selected sysadmin functions to these users
+    - Would require identifying sysadmin functions
+    - Possibly use a second table to track all possible commands and required privs
+
+- RangeCheck Module
+    - Privileged-only
+    - User registers a handset node id to module
+    - User sets time between checks (x) and total test duration (y)
+    - System sends location request to registered handsets every x minutes for y minutes
+    - Date/time, handset node id, and gps location are saved to database table
+    - Results are available in admin tool as a list sorted by date/time and grouped by 
+      node id
+
