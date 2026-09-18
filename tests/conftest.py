@@ -2,7 +2,7 @@ import pytest
 
 from rsmesh_bbs import db_operations
 from rsmesh_bbs.mesh_client import BbsMeshClient
-from rsmesh_bbs.utils import user_states
+from rsmesh_bbs.utils import clear_user_display_cache, user_states
 
 
 def _close_db_connection():
@@ -40,6 +40,8 @@ def mesh_client(temp_db, monkeypatch):
     )
     monkeypatch.setattr("rsmesh_bbs.utils.time.sleep", lambda *_args, **_kwargs: None)
     user_states.clear()
+    clear_user_display_cache()
     client = BbsMeshClient.create()
     yield client
     user_states.clear()
+    clear_user_display_cache()

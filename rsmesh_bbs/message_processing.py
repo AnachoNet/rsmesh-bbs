@@ -29,6 +29,7 @@ from .sync_wire import (
 from .utils import (
     get_user_state, get_node_short_name, get_node_id_from_num, send_message,
     get_sync_peer_by_bbs_node, peer_accepts_inbound_sync, drain_outbound_user_messages,
+    redisplay_last_user_prompt,
 )
 from .node_resolution import is_hex_node_id, record_mesh_node_from_interface, record_mesh_node_from_packet
 
@@ -363,6 +364,10 @@ def _handle_user_message(sender_id, message, interface):
     state = get_user_state(sender_id)
     message_lower = message.lower().strip()
     bbs_nodes = interface.bbs_nodes
+
+    if message.strip() == "??":
+        redisplay_last_user_prompt(sender_id, interface)
+        return
 
     if len(message_lower) == 2 and message_lower[1] == 'x':
         message_lower = message_lower[0]

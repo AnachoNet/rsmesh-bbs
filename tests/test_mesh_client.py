@@ -78,6 +78,18 @@ class TestMeshClientMenus:
         replies = mesh_client.send_joined("sm")
         assert "Short Name of the node to message?" in replies
 
+    def test_double_question_redisplay_last_prompt(self, mesh_client):
+        mesh_client.send("m")
+        first = mesh_client.send_joined("r")
+        assert "[R]ead Mail" in first
+        second = mesh_client.send_joined("??")
+        assert second == first
+
+    def test_double_question_without_history_shows_main_menu(self, mesh_client):
+        replies = mesh_client.send_joined("??")
+        assert "Test BBS" in replies
+        assert "[B]ulletins" in replies
+
     def test_read_mail_shows_message(self, mesh_client):
         unique_id = str(uuid.uuid4())
         db_operations.add_mail(

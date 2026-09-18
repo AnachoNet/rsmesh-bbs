@@ -17,6 +17,7 @@ from .sync_wire import (
 )
 
 user_states = {}
+_last_user_displays = {}
 
 MESH_MESSAGE_MAX_SIZE = 200
 DISPLAY_FIELD_SEP = "  "
@@ -263,7 +264,38 @@ def send_sync_message(message, destination, interface, sync_protocol=None):
     return True
 
 
-def send_message(message, destination, interface, require_ack=False, want_ack=None):
+def record_user_display(destination, messages):
+    if destination == BROADCAST_NUM:
+        return
+    texts = [text for text in (messages or []) if text]
+    if texts:
+        _last_user_displays[destination] = list(texts)
+
+
+def clear_user_display_cache():
+    _last_user_displays.clear()
+
+
+def redisplay_last_user_prompt(destination, interface):
+    messages = _last_user_displays.get(destination)
+    if not messages:
+        from .command_handlers import handle_help_command
+
+        handle_help_command(destination, interface)
+        return True
+    return send_user_messages(messages, destination, interface, record_display=False)
+
+
+def send_message(
+    message,
+    destination,
+    interface,
+    require_ack=False,
+    want_ack=None,
+    record_display=True,
+):
+    if record_display:
+        record_user_display(destination, [message])
     max_payload_size = MESH_MESSAGE_MAX_SIZE
     chunks = [
         message[i:i + max_payload_size]
@@ -285,15 +317,22 @@ def send_message(message, destination, interface, require_ack=False, want_ack=No
     return True
 
 
-def send_user_messages(messages, destination, interface):
+def send_user_messages(messages, destination, interface, record_display=True):
     """Send user-facing messages in order with pacing between each message."""
     if not messages:
         return True
 
+    if record_display:
+        record_user_display(destination, messages)
+
     for index, message in enumerate(messages):
         if not send_message(
-            message, destination, interface,
-            require_ack=False, want_ack=True,
+            message,
+            destination,
+            interface,
+            require_ack=False,
+            want_ack=True,
+            record_display=False,
         ):
             return False
         if index < len(messages) - 1:
@@ -304,13 +343,15 @@ def send_user_messages(messages, destination, interface):
     return True
 
 
-def send_user_message(message, destination, interface):
+def send_user_message(message, destination, interface, record_display=True):
     """Send a user-facing reply with brief pacing instead of ACK-wait.
 
     Mesh ACKs are unreliable for handset delivery ordering and waiting for them
     blocks the pubsub thread, preventing follow-up prompts and new input.
     """
-    return send_user_messages([message], destination, interface)
+    return send_user_messages(
+        [message], destination, interface, record_display=record_display
+    )
 
 
 _outbound_lock = threading.Lock()
@@ -321,6 +362,7 @@ def enqueue_user_messages(messages, destination, interface):
     """Queue paced user messages for delivery on the pubsub thread."""
     if not messages or interface is None:
         return
+    record_user_display(destination, messages)
     with _outbound_lock:
         _outbound_queue.append((list(messages), destination, interface))
 

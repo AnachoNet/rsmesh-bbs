@@ -6,6 +6,8 @@ How to interact with the BBS from a Meshtastic handset.
 
 Send commands as **direct messages to the BBS node**. The server ignores group-channel traffic and messages addressed to other nodes. After connecting, send any letter command or an unrecognized message to open the main menu.
 
+Send **`??`** at any time to **redisplay the last menu or prompt** from the BBS (for example if a long reply was split across several mesh packets). If there is no prior reply yet, the BBS sends the **main menu** (same as a fresh connection). When redisplaying a saved prompt, your place in a multi-step flow is unchanged.
+
 The following describes the menus for a standard RSMesh BBS system. Individual system operators may choose to disable some core functions, or extend the BBS with optional modules that offer additional features.
 
 ## Main Menu
