@@ -679,8 +679,8 @@ RS version alerts appear when a peer sends a sync wire version that does not mat
 |--------|---------|----------------------|
 | `BBS node (e.g. !17d7e4b7):` | — | Required Meshtastic node ID |
 | `BBS name (optional):` | empty | Display name for lists |
-| `Allow resync (Y/N) [Y]:` | Y | When **`Y`**, **your BBS accepts `RESYNC_REQUEST` from this peer’s node** and replays outbound sync **to them** (rate-limited). When **`N`**, ignore their resync requests. This does not block **you** from using [Request Resync](#request-resync) to ask **their** BBS for a replay. **rsv1** only; tc2 never sends resync requests. |
 | `Sync protocol (tc2/rsv1) [tc2]:` | `tc2` | **`tc2`** or **`rsv1`** |
+| `Allow resync (Y/N) [Y]:` | Y | **Prompted only for `rsv1`** (after protocol). For **`tc2`**, not shown; stored as **`N`**. When **`Y`**, **your BBS accepts `RESYNC_REQUEST` from this peer’s node** and replays outbound sync **to them** (rate-limited). When **`N`**, ignore their resync requests. This does not block **you** from using [Request Resync](#request-resync) to ask **their** BBS for a replay. |
 | `Sync bulletins out (Y/N) [Y]:` | Y | Send bulletins to this peer |
 | `Sync mail in/out (Y/N) [Y]:` | Y | Bidirectional mail sync |
 | `Sync channels out (Y/N) [Y]:` | Y | Send published channels to this peer |

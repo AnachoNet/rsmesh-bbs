@@ -41,6 +41,27 @@ class TestRegisteredModuleSyncRows:
         assert rows[0][1][1] == "Node Info"
 
 
+class TestSyncPeerAllowResyncPrompt:
+    def test_prompt_skips_tc2_and_returns_n(self, monkeypatch):
+        admin_module = _load_admin_module(monkeypatch)
+        called = []
+
+        def _fake_input(prompt):
+            called.append(prompt)
+            return ""
+
+        monkeypatch.setattr(admin_module, "input_bold", _fake_input)
+
+        assert admin_module._prompt_allow_resync("tc2", "Y") == "N"
+        assert called == []
+
+    def test_prompt_asks_for_rsv1(self, monkeypatch):
+        admin_module = _load_admin_module(monkeypatch)
+        monkeypatch.setattr(admin_module, "input_bold", lambda _prompt: "N")
+
+        assert admin_module._prompt_allow_resync("rsv1", "Y") == "N"
+
+
 class TestSyncPeerModuleAdminPrompt:
     def test_prompt_skips_tc2_protocol(self, temp_db, monkeypatch, capsys):
         admin_module = _load_admin_module(monkeypatch)

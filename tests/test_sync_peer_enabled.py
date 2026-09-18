@@ -45,3 +45,12 @@ class TestSyncPeerEnabled:
         peer = db_operations.get_sync_peers()[0]
 
         assert peer[13] == "Y"
+
+    def test_tc2_peer_stores_allow_resync_n(self, temp_db):
+        db_operations.add_sync_peer(
+            "!peer_a",
+            sync_protocol="tc2",
+            allow_resync="Y",
+        )
+        peer = db_operations.get_sync_peers()[0]
+        assert peer[14] == "N"

@@ -1188,6 +1188,12 @@ def _apply_sync_mesh_nodes_for_protocol(sync_protocol, sync_mesh_nodes=None):
     return _normalize_sync_flag(sync_mesh_nodes)
 
 
+def _apply_allow_resync_for_protocol(sync_protocol, allow_resync='Y'):
+    if sync_protocol == 'tc2':
+        return 'N'
+    return _normalize_sync_flag(allow_resync)
+
+
 def _normalize_sync_protocol(protocol):
     protocol = (protocol or 'tc2').strip().lower()
     return protocol if protocol in SYNC_PROTOCOLS else None
@@ -1719,7 +1725,7 @@ def add_sync_peer(
     ingest_bulletins = _normalize_sync_flag(ingest_bulletins)
     ingest_channels = _normalize_sync_flag(ingest_channels)
     enabled = _normalize_sync_flag(enabled)
-    allow_resync = _normalize_sync_flag(allow_resync)
+    allow_resync = _apply_allow_resync_for_protocol(sync_protocol, allow_resync)
     if not bbs_node or not sync_protocol:
         return False
 
@@ -1797,7 +1803,7 @@ def update_sync_peer(
     ingest_bulletins = _normalize_sync_flag(ingest_bulletins)
     ingest_channels = _normalize_sync_flag(ingest_channels)
     enabled = _normalize_sync_flag(enabled)
-    allow_resync = _normalize_sync_flag(allow_resync)
+    allow_resync = _apply_allow_resync_for_protocol(sync_protocol, allow_resync)
     if not peer_id or not bbs_node or not sync_protocol:
         return False
 

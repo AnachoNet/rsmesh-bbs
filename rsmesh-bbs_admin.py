@@ -1308,6 +1308,16 @@ def _sync_peer_alert_field(peer):
     return f"Alert: received RS v{seen}"
 
 
+def _prompt_allow_resync(sync_protocol, current='Y'):
+    if (sync_protocol or '').strip().lower() != 'rsv1':
+        return 'N'
+    current = current or 'Y'
+    return _normalize_yn(
+        input_bold(f"Allow resync (Y/N) [{current}]: "),
+        current,
+    )
+
+
 def _prompt_sync_peer_module_flags(peer_id, sync_protocol):
     protocol = (sync_protocol or "").strip().lower()
     if protocol != "rsv1":
@@ -1437,8 +1447,8 @@ def add_sync_peer_entry():
     begin_form_screen("Add Sync Peer")
     bbs_node = input_bold("BBS node (e.g. !17d7e4b7): ").strip()
     bbs_name = input_bold("BBS name (optional): ").strip() or None
-    allow_resync = _normalize_yn(input_bold("Allow resync (Y/N) [Y]: "), 'Y')
     sync_protocol = input_bold(f"Sync protocol ({'/'.join(SYNC_PROTOCOLS)}) [tc2]: ").strip() or 'tc2'
+    allow_resync = _prompt_allow_resync(sync_protocol, 'Y')
     sync_bulletins = _normalize_yn(input_bold("Sync bulletins out (Y/N) [Y]: "), 'Y')
     sync_mail = _normalize_yn(input_bold("Sync mail in/out (Y/N) [Y]: "), 'Y')
     sync_channels = _normalize_yn(input_bold("Sync channels out (Y/N) [Y]: "), 'Y')
@@ -1525,11 +1535,8 @@ def edit_sync_peer_entry():
     print_bold("Press Enter to keep the current value.")
     bbs_node = input_bold(f"BBS node [{bbs_node}]: ").strip() or bbs_node
     bbs_name = input_bold(f"BBS name [{bbs_name or ''}]: ").strip() or bbs_name
-    allow_resync = _normalize_yn(
-        input_bold(f"Allow resync (Y/N) [{allow_resync}]: "),
-        allow_resync,
-    )
     sync_protocol = input_bold(f"Sync protocol ({'/'.join(SYNC_PROTOCOLS)}) [{sync_protocol}]: ").strip() or sync_protocol
+    allow_resync = _prompt_allow_resync(sync_protocol, allow_resync)
     sync_bulletins = _normalize_yn(
         input_bold(f"Sync bulletins out (Y/N) [{sync_bulletins}]: "),
         sync_bulletins,
