@@ -18,8 +18,15 @@ from rsmesh_bbs.utils import (
 
 from bbs_list import storage
 
+LIST_MENU_PROMPT = "List: [A]ll  [S]ync-Interested  E[X]IT"
+BROWSE_FOOTER = "Enter list ID for details. [R]eturn  E[X]IT"
+DETAIL_FOOTER = "[R]eturn  E[X]IT"
+
 
 class Module:
+    def __init__(self):
+        self._ui_phase = {}
+
     def on_load(self, ctx):
         storage.configure(ctx.module_dir)
         ctx.register_sync(
@@ -34,43 +41,93 @@ class Module:
         )
 
     def on_enter(self, sender_id, ctx):
-        self._show_list(sender_id, ctx, sync_only=False)
+        self._set_phase(sender_id, "menu")
+        self._send_list_menu(sender_id, ctx)
 
     def on_message(self, sender_id, message, ctx):
         text = (message or "").strip()
-        lowered = text.lower()
-        if len(lowered) == 2 and lowered[1] == "x":
-            lowered = lowered[0]
-        if lowered == "x":
+        key = self._command_key(text)
+        phase = self._ui_phase.get(sender_id, "menu")
+
+        if key == "x":
+            self._clear_phase(sender_id)
             return MODULE_RESULT_EXIT
-        if lowered == "a":
-            self._show_list(sender_id, ctx, sync_only=False)
-            return MODULE_RESULT_CONTINUE
-        if lowered == "s":
-            self._show_list(sender_id, ctx, sync_only=True)
-            return MODULE_RESULT_CONTINUE
-        if lowered == "?":
+        if key == "?":
             self._send_help(sender_id, ctx)
             return MODULE_RESULT_CONTINUE
 
-        entry = storage.get_entry_by_id(text) if text.isdigit() else None
-        if entry is not None:
+        if phase == "menu":
+            if key == "a":
+                self._show_list(sender_id, ctx, sync_only=False)
+                return MODULE_RESULT_CONTINUE
+            if key == "s":
+                self._show_list(sender_id, ctx, sync_only=True)
+                return MODULE_RESULT_CONTINUE
+            self._send_list_menu(sender_id, ctx, prefix="Choose A, S, or X.\n")
+            return MODULE_RESULT_CONTINUE
+
+        if phase == "detail":
+            if key == "r":
+                self._set_phase(sender_id, "menu")
+                self._send_list_menu(sender_id, ctx)
+                return MODULE_RESULT_CONTINUE
             ctx.send_user_message(
                 sender_id,
-                f"= {ctx.module_name} =\n"
-                f"{storage.format_mesh_detail(entry)}\n"
-                "[A]ll  [S]ync  [?]Help  E[X]IT",
+                f"Choose R or X.\n{DETAIL_FOOTER}",
             )
             return MODULE_RESULT_CONTINUE
 
-        ctx.send_user_message(
-            sender_id,
-            "Enter list ID to view details, or A/S/?/X.\n"
-            "[A]ll  [S]ync  [?]Help  E[X]IT",
-        )
+        if phase == "browse":
+            if key == "r":
+                self._set_phase(sender_id, "menu")
+                self._send_list_menu(sender_id, ctx)
+                return MODULE_RESULT_CONTINUE
+            if text.isdigit():
+                entry = storage.get_entry_by_id(text)
+                if entry is not None:
+                    self._show_detail(sender_id, ctx, entry)
+                    return MODULE_RESULT_CONTINUE
+            ctx.send_user_message(
+                sender_id,
+                f"Enter a valid list ID, R, or X.\n{BROWSE_FOOTER}",
+            )
+            return MODULE_RESULT_CONTINUE
+
+        self._set_phase(sender_id, "menu")
+        self._send_list_menu(sender_id, ctx)
         return MODULE_RESULT_CONTINUE
 
+    @staticmethod
+    def _command_key(text):
+        lowered = (text or "").strip().lower()
+        if len(lowered) == 2 and lowered[1] == "x":
+            lowered = lowered[0]
+        return lowered
+
+    def _set_phase(self, sender_id, phase):
+        self._ui_phase[sender_id] = phase
+
+    def _clear_phase(self, sender_id):
+        self._ui_phase.pop(sender_id, None)
+
+    def _send_list_menu(self, sender_id, ctx, prefix=""):
+        body = f"= {ctx.module_name} =\n"
+        if prefix:
+            body += prefix
+        body += LIST_MENU_PROMPT
+        ctx.send_user_message(sender_id, body)
+
+    def _show_detail(self, sender_id, ctx, entry):
+        self._set_phase(sender_id, "detail")
+        ctx.send_user_message(
+            sender_id,
+            f"= {ctx.module_name} =\n"
+            f"{storage.format_mesh_detail(entry)}\n"
+            f"{DETAIL_FOOTER}",
+        )
+
     def _show_list(self, sender_id, ctx, sync_only=False):
+        self._set_phase(sender_id, "browse")
         entries = storage.list_entries(sync_only=sync_only)
         title = "Sync-interested boards" if sync_only else "Known boards"
         if not entries:
@@ -78,17 +135,14 @@ class Module:
                 sender_id,
                 f"= {ctx.module_name} =\n"
                 f"No {title.lower()}.\n"
-                "[A]ll  [S]ync  [?]Help  E[X]IT",
+                f"{LIST_MENU_PROMPT}",
             )
+            self._set_phase(sender_id, "menu")
             return
 
-        header = (
-            f"= {ctx.module_name} =\n"
-            f"{title} ({len(entries)}).\n"
-            "Enter list ID for details."
-        )
+        header = f"= {ctx.module_name} =\n{title} ({len(entries)})."
         body_lines = [storage.format_mesh_list_line(entry) for entry in entries]
-        footer = "[A]ll  [S]ync  [?]Help  E[X]IT"
+        footer = BROWSE_FOOTER
         from rsmesh_bbs.utils import bundle_lines_for_mesh
 
         messages = bundle_lines_for_mesh([header] + body_lines + [footer])
@@ -100,7 +154,9 @@ class Module:
             f"= {ctx.module_name} =\n"
             "Directory of mesh BBS boards.\n"
             "* marks sync interest on list lines.\n"
-            "[A]ll list  [S]ync list  list ID view\n"
+            f"{LIST_MENU_PROMPT}\n"
+            f"{BROWSE_FOOTER}\n"
+            f"{DETAIL_FOOTER}\n"
             "E[X]IT return to main menu",
         )
 

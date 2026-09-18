@@ -292,3 +292,46 @@ class TestBbsListSync:
         assert entry["board_name"] == "Remote BBS"
         assert entry["sync_interest"] == "Y"
         assert entry["is_local"] == "N"
+
+
+class _MeshCtx:
+    def __init__(self):
+        self.messages = []
+
+    def send_user_message(self, _sender_id, text):
+        self.messages.append(text)
+
+    def send_user_messages(self, _sender_id, messages):
+        self.messages.extend(messages)
+
+
+class TestBbsListMeshUi:
+    def test_on_enter_shows_list_menu_only(self, bbs_list_db):
+        mod = bbs_list_module.Module()
+        ctx = _MeshCtx()
+        ctx.module_name = "BBS List"
+        mod.on_enter("!user01", ctx)
+        assert len(ctx.messages) == 1
+        assert "List: [A]ll  [S]ync-Interested  E[X]IT" in ctx.messages[0]
+        assert "Enter list ID" not in ctx.messages[0]
+
+    def test_list_view_prompts_for_entry_not_list_menu(self, bbs_list_db):
+        storage.upsert_entry("Alpha", "!aabbcc01", "ALPH", sync_interest="Y")
+        mod = bbs_list_module.Module()
+        ctx = _MeshCtx()
+        ctx.module_name = "BBS List"
+        mod.on_message("!user01", "a", ctx)
+        assert any("Enter list ID for details" in msg for msg in ctx.messages)
+        assert not any("List: [A]ll  [S]ync-Interested" in msg for msg in ctx.messages)
+
+    def test_detail_return_shows_list_menu(self, bbs_list_db):
+        storage.upsert_entry("Alpha", "!aabbcc01", "ALPH", sync_interest="Y")
+        mod = bbs_list_module.Module()
+        ctx = _MeshCtx()
+        ctx.module_name = "BBS List"
+        mod.on_enter("!user01", ctx)
+        mod.on_message("!user01", "a", ctx)
+        mod.on_message("!user01", "1", ctx)
+        mod.on_message("!user01", "r", ctx)
+        assert ctx.messages[-1].endswith("List: [A]ll  [S]ync-Interested  E[X]IT")
+        assert "[R]eturn  E[X]IT" in ctx.messages[-2]

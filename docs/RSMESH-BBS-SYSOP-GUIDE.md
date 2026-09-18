@@ -410,7 +410,7 @@ Enable under **Administration → Modules**. By default, users open modules from
 | **Fortune** | `F` (default) | Shows a random fortune on entry; any message fetches another; `X` exits |
 | **Node Info** | (per `modules` table) | `[N]odes` counts by time window, `[H]ardware` model counts, `[R]oles` role counts; sysadmins also get `[L]ist Nodes` (detailed signal/GPS lines) |
 | **Example Hello** | (disabled by default) | Greets on entry; demonstrates visits DB and scheduled greetings |
-| **BBS List** | `L` (default) | Browse known mesh BBS boards; mesh lines start with list ID, short name, board name, node ID, and truncated location; `*` marks sync interest (display only); enter list ID for details; `[A]ll` / `[S]ync` lists. All entries sync to peers regardless of sync interest. Admin lists start with list ID and show full location plus `sync=Y/N` and `local=Y/N`. |
+| **BBS List** | `L` (default) | Opens with `List: [A]ll  [S]ync-Interested  E[X]IT`; after A or S, list lines show list ID, short name, board name, node ID, and truncated location (`*` = sync interest) with `Enter list ID for details. [R]eturn  E[X]IT`; detail view uses `[R]eturn` for the list menu or E[X]IT for the main menu. Admin lists start with list ID and show full location plus `sync=Y/N` and `local=Y/N`. |
 
 Fortune has no admin screen. Node Info admin is view-only (**List Node Info**). **BBS List** admin supports register-this-BBS, add/edit/delete entries, and sync-interested list — see [BBS List admin](#bbs-list) below. See also [Module development](RSMESH-BBS-DEVELOPER-GUIDE.md#modules) in the Developer Guide.
 
