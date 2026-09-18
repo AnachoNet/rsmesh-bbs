@@ -17,6 +17,8 @@ MENU_SEPARATOR_LINE = 22
 MENU_INPUT_LINE = 23
 PAGE_HEADER_LINE_COUNT = 3
 MENU_OPTION_INDENT = 5
+# Confirmation/action messages: 5-column indent + 70 text + 5-column right margin.
+MESSAGE_WRAP_TEXT_WIDTH = 70
 CONTENT_LINES_PER_PAGE = CONTENT_END_LINE - CONTENT_START_LINE + 1
 
 console = Console(width=DISPLAY_COLUMNS, force_terminal=True)
@@ -84,7 +86,11 @@ def begin_form_screen(page_title):
 
 
 def wrap_message_text(text, max_width):
-    """Wrap a single line of plain text to fit within max_width (word-aware)."""
+    """Wrap a single line of plain text to fit within max_width (word-aware).
+
+    Words are never broken across lines; a word longer than max_width occupies
+    its own line whole.
+    """
     if max_width <= 0:
         return [text or ""]
     text = text or ""
@@ -103,27 +109,25 @@ def wrap_message_text(text, max_width):
             current = []
             current_len = 0
 
-    def append_chunk(chunk):
-        for start in range(0, len(chunk), max_width):
-            lines.append(chunk[start : start + max_width])
-
     for word in words:
-        if len(word) > max_width:
-            flush()
-            append_chunk(word)
-            continue
         if not current:
-            current = [word]
-            current_len = len(word)
+            if len(word) <= max_width:
+                current = [word]
+                current_len = len(word)
+            else:
+                lines.append(word)
             continue
         candidate = current_len + 1 + len(word)
-        if candidate <= max_width:
+        if len(word) <= max_width and candidate <= max_width:
             current.append(word)
             current_len = candidate
-        else:
+        elif len(word) <= max_width:
             flush()
             current = [word]
             current_len = len(word)
+        else:
+            flush()
+            lines.append(word)
     flush()
     return lines or [""]
 
@@ -131,11 +135,11 @@ def wrap_message_text(text, max_width):
 def message_lines_for_display(
     message,
     indent=MENU_OPTION_INDENT,
-    width=DISPLAY_COLUMNS,
+    text_width=MESSAGE_WRAP_TEXT_WIDTH,
 ):
-    """Return display lines for a message, wrapped to the admin screen width."""
+    """Return display lines for a message, wrapped to the admin message width."""
     prefix = " " * indent
-    max_text_width = max(1, width - indent)
+    max_text_width = max(1, text_width)
     display_lines = []
     raw_lines = (message or "").splitlines()
     if not raw_lines:
