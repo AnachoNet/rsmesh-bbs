@@ -345,16 +345,6 @@ class ModuleManager:
             task.last_run = now
 
 
-def _drop_cached_module_imports(module_dir_name):
-    """Drop cached module package imports so admin picks up on-disk updates."""
-    admin_name = f"bbs_module.{module_dir_name}_admin"
-    to_drop = [admin_name, module_dir_name]
-    prefix = f"{module_dir_name}."
-    to_drop.extend(name for name in sys.modules if name.startswith(prefix))
-    for name in to_drop:
-        sys.modules.pop(name, None)
-
-
 def load_module_admin(module_dir_name):
     admin_path = MODULES_DIR / module_dir_name / f"{module_dir_name}_admin.py"
     if not admin_path.exists():
@@ -362,7 +352,6 @@ def load_module_admin(module_dir_name):
     try:
         if str(MODULES_DIR) not in sys.path:
             sys.path.insert(0, str(MODULES_DIR))
-        _drop_cached_module_imports(module_dir_name)
         spec = importlib.util.spec_from_file_location(
             f"bbs_module.{module_dir_name}_admin", admin_path
         )

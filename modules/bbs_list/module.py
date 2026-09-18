@@ -140,8 +140,6 @@ class Module:
 
         sent_count = 0
         for entry in entries:
-            if entry.get("peer_sync") != "Y":
-                continue
             record_key = entry["node_hex"]
             pending = get_pending_sync_peers(
                 storage.RECORD_TYPE,

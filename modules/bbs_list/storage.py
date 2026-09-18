@@ -18,7 +18,6 @@ _CREATE_TABLE_SQL = """CREATE TABLE IF NOT EXISTS bbs_entries (
                short_name TEXT NOT NULL,
                location TEXT,
                sync_interest TEXT NOT NULL DEFAULT 'N',
-               peer_sync TEXT NOT NULL DEFAULT 'N',
                is_local TEXT NOT NULL DEFAULT 'N',
                updated INTEGER NOT NULL
            )"""
@@ -79,21 +78,11 @@ def _migrate_legacy_schema(cursor):
     cursor.execute("ALTER TABLE bbs_entries_new RENAME TO bbs_entries")
 
 
-def _migrate_peer_sync_column(cursor):
-    columns = _table_columns(cursor, "bbs_entries")
-    if not columns or "peer_sync" in columns:
-        return
-    cursor.execute(
-        "ALTER TABLE bbs_entries ADD COLUMN peer_sync TEXT NOT NULL DEFAULT 'Y'"
-    )
-
-
 def setup_db():
     conn = _connect()
     c = conn.cursor()
     c.execute(_CREATE_TABLE_SQL)
     _migrate_legacy_schema(c)
-    _migrate_peer_sync_column(c)
     c.execute(
         "CREATE INDEX IF NOT EXISTS idx_bbs_entries_sync "
         "ON bbs_entries(sync_interest, board_name COLLATE NOCASE)"
@@ -119,10 +108,6 @@ def normalize_sync_interest(value):
     return "Y" if (value or "").strip().upper() == "Y" else "N"
 
 
-def normalize_peer_sync(value):
-    return "Y" if (value or "").strip().upper() == "Y" else "N"
-
-
 def _parse_entry_id(value):
     try:
         entry_id = int(str(value).strip())
@@ -143,9 +128,8 @@ def _row_to_entry(row):
         "short_name": row[3],
         "location": row[4] or "",
         "sync_interest": row[5],
-        "peer_sync": row[6],
-        "is_local": row[7],
-        "updated": row[8],
+        "is_local": row[6],
+        "updated": row[7],
     }
 
 
@@ -154,15 +138,13 @@ def list_entries(sync_only=False):
     c = conn.cursor()
     if sync_only:
         c.execute(
-            "SELECT id, node_hex, board_name, short_name, location, sync_interest, peer_sync, "
-            "is_local, updated "
+            "SELECT id, node_hex, board_name, short_name, location, sync_interest, is_local, updated "
             "FROM bbs_entries WHERE sync_interest = 'Y' "
             "ORDER BY id"
         )
     else:
         c.execute(
-            "SELECT id, node_hex, board_name, short_name, location, sync_interest, peer_sync, "
-            "is_local, updated "
+            "SELECT id, node_hex, board_name, short_name, location, sync_interest, is_local, updated "
             "FROM bbs_entries ORDER BY id"
         )
     rows = [_row_to_entry(row) for row in c.fetchall()]
@@ -177,8 +159,7 @@ def get_entry_by_id(entry_id):
     conn = _connect()
     c = conn.cursor()
     c.execute(
-        "SELECT id, node_hex, board_name, short_name, location, sync_interest, peer_sync, "
-        "is_local, updated "
+        "SELECT id, node_hex, board_name, short_name, location, sync_interest, is_local, updated "
         "FROM bbs_entries WHERE id = ?",
         (entry_id,),
     )
@@ -194,8 +175,7 @@ def get_entry(node_hex):
     conn = _connect()
     c = conn.cursor()
     c.execute(
-        "SELECT id, node_hex, board_name, short_name, location, sync_interest, peer_sync, "
-        "is_local, updated "
+        "SELECT id, node_hex, board_name, short_name, location, sync_interest, is_local, updated "
         "FROM bbs_entries WHERE node_hex = ?",
         (node_hex,),
     )
@@ -210,7 +190,6 @@ def upsert_entry(
     short_name,
     location=None,
     sync_interest="N",
-    peer_sync="N",
     is_local="N",
 ):
     node_hex = normalize_node_hex(node_hex)
@@ -218,7 +197,6 @@ def upsert_entry(
     short_name = normalize_short_name(short_name)
     location = (location or "").strip()
     sync_interest = normalize_sync_interest(sync_interest)
-    peer_sync = normalize_peer_sync(peer_sync)
     is_local = "Y" if (is_local or "N").strip().upper() == "Y" else "N"
     if not node_hex or not board_name or not short_name:
         return None
@@ -227,14 +205,13 @@ def upsert_entry(
     c = conn.cursor()
     c.execute(
         """INSERT INTO bbs_entries
-           (node_hex, board_name, short_name, location, sync_interest, peer_sync, is_local, updated)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           (node_hex, board_name, short_name, location, sync_interest, is_local, updated)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(node_hex) DO UPDATE SET
                board_name = excluded.board_name,
                short_name = excluded.short_name,
                location = excluded.location,
                sync_interest = excluded.sync_interest,
-               peer_sync = excluded.peer_sync,
                is_local = excluded.is_local,
                updated = excluded.updated""",
         (
@@ -243,7 +220,6 @@ def upsert_entry(
             short_name,
             location,
             sync_interest,
-            peer_sync,
             is_local,
             int(time.time()),
         ),
@@ -294,7 +270,6 @@ def upsert_from_wire(fields):
         short_name=normalize_short_name(fields.get("sn")),
         location=(fields.get("loc") or "").strip(),
         sync_interest=normalize_sync_interest(fields.get("si")),
-        peer_sync="N",
         is_local="N",
     )
 
@@ -313,7 +288,6 @@ def list_unsynced_items():
     return [
         (entry["node_hex"], f"{entry['id']} {entry['board_name']}")
         for entry in list_entries()
-        if entry.get("peer_sync") == "Y"
     ]
 
 
@@ -336,7 +310,6 @@ def format_list_line(entry):
         entry["node_hex"],
         location,
         f"sync={entry['sync_interest']}",
-        f"peer={entry['peer_sync']}",
         f"local={entry['is_local']}",
     ]
     return "  ".join(parts)

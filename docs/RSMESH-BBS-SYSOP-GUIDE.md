@@ -410,7 +410,7 @@ Enable under **Administration → Modules**. By default, users open modules from
 | **Fortune** | `F` (default) | Shows a random fortune on entry; any message fetches another; `X` exits |
 | **Node Info** | (per `modules` table) | `[N]odes` counts by time window, `[H]ardware` model counts, `[R]oles` role counts; sysadmins also get `[L]ist Nodes` (detailed signal/GPS lines) |
 | **Example Hello** | (disabled by default) | Greets on entry; demonstrates visits DB and scheduled greetings |
-| **BBS List** | `L` (default) | Browse known mesh BBS boards; mesh lines start with list ID, short name, board name, node ID, and truncated location; `*` marks sync interest (display only); enter list ID for details; `[A]ll` / `[S]ync` lists. Outbound peer sync is controlled per entry (`peer=Y/N` in admin). Admin lists start with list ID and show full location plus `sync=Y/N`, `peer=Y/N`, and `local=Y/N`. |
+| **BBS List** | `L` (default) | Browse known mesh BBS boards; mesh lines start with list ID, short name, board name, node ID, and truncated location; `*` marks sync interest (display only); enter list ID for details; `[A]ll` / `[S]ync` lists. All entries sync to peers regardless of sync interest. Admin lists start with list ID and show full location plus `sync=Y/N` and `local=Y/N`. |
 
 Fortune has no admin screen. Node Info admin is view-only (**List Node Info**). **BBS List** admin supports register-this-BBS, add/edit/delete entries, and sync-interested list — see [BBS List admin](#bbs-list) below. See also [Module development](RSMESH-BBS-DEVELOPER-GUIDE.md#modules) in the Developer Guide.
 
@@ -1098,11 +1098,9 @@ Paginated, view-only.
 | `6` | Delete Entry |
 | `0` | Back to Modules |
 
-**List line format:** `{id}  {short}  {board name}  {node hex}  {location}  sync={Y/N}  peer={Y/N}  local={Y/N}`
+**List line format:** `{id}  {short}  {board name}  {node hex}  {location}  sync={Y/N}  local={Y/N}`
 
-**Sync interest (`sync=Y/N`):** mesh display only — the `[S]ync` list filter and `*` marker on mesh lines.
-
-**Peer sync (`peer=Y/N`):** whether the entry is pushed to sync peers via `BBS_LIST_SYNC`. Add defaults to **N**; **Register This BBS** defaults to **Y**. **Edit Entry** prompts for both sync interest and peer sync (Enter keeps the current value).
+**Sync interest (`sync=Y/N`):** mesh display only — the `[S]ync` list filter and `*` marker on mesh lines. **All entries** are still pushed to sync peers when module sync is enabled.
 
 **Edit / Delete:** shows the paginated entry list first; enter the **list ID** at the prompt (`Enter ID or X=back:`), then complete the form (edit) or confirm deletion.
 

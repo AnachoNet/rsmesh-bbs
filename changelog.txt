@@ -54,7 +54,6 @@ Module sync (Phase C)
   - rsv1 BBS_LIST_SYNC wire sync with server log lines for send/receive
   - Inbound wire updates ignored for local entries (is_local=Y); prevents false synced state
   - Integer list IDs; separate admin vs mesh line formats
-  - peer_sync flag and admin prompt to control outbound peer sync (separate from mesh sync interest)
   - mesh browse; SysAdmin add/edit/delete with paginated ID selection
 
 Mesh nodes sync (rsv1)
