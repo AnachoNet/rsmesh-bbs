@@ -1,7 +1,10 @@
 import uuid
 from datetime import datetime
 
+import pytest
+
 from rsmesh_bbs import db_operations
+from rsmesh_bbs.mock_interface import MockMeshInterface
 
 
 def _add_catalog_node(short_name, node_hex, forward_to=None):
@@ -58,3 +61,53 @@ class TestMailForwarding:
         ).fetchone()
         assert row[0] == "!bob01"
         assert "Sent to ALICE" in row[1]
+
+
+class TestMailRecipientNotification:
+    def test_local_add_mail_notifies_recipient(self, temp_db, monkeypatch):
+        interface = MockMeshInterface()
+        interface.add_node("!recipient01", 42, "RCPT")
+        sent = []
+
+        def _capture(text, destination_id, iface):
+            sent.append((destination_id, text))
+            return True
+
+        monkeypatch.setattr(db_operations, "send_message", _capture)
+        monkeypatch.setattr(db_operations, "sync_mail_record", lambda *args, **kwargs: None)
+
+        db_operations.add_mail(
+            "!sender01",
+            "SNDR",
+            "!recipient01",
+            "Subject",
+            "Body",
+            [],
+            interface,
+            defer_sync=True,
+        )
+
+        assert len(sent) == 1
+        assert sent[0][0] == "!recipient01"
+        assert sent[0][1] == "New mail from SNDR. Send RM to read new mail."
+
+    def test_sync_ingest_does_not_notify_recipient(self, temp_db, monkeypatch):
+        interface = MockMeshInterface()
+        interface.add_node("!recipient01", 42, "RCPT")
+
+        def _fail_if_called(*_args, **_kwargs):
+            pytest.fail("send_message should not run for sync ingest")
+
+        monkeypatch.setattr(db_operations, "send_message", _fail_if_called)
+
+        db_operations.add_mail(
+            "!sender01",
+            "SNDR",
+            "!recipient01",
+            "Subject",
+            "Body",
+            [],
+            interface,
+            unique_id=str(uuid.uuid4()),
+            from_sync=True,
+        )

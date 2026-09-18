@@ -3158,6 +3158,18 @@ def purge_deleted_bulletins(bbs_nodes, interface):
                 send_delete_bulletin_to_sync_peers(bulletin_id, unique_id, bulletin_peers, interface)
             logging.info(f"Purged bulletin {bulletin_id} and sent delete sync to peer BBS nodes.")
 
+def _notify_new_mail_recipient(sender_short_name, recipient_id, interface):
+    from .node_resolution import is_hex_node_id
+
+    if interface is None or not is_hex_node_id(recipient_id):
+        return
+    send_message(
+        f"New mail from {sender_short_name}. Send RM to read new mail.",
+        recipient_id,
+        interface,
+    )
+
+
 def add_mail(
     sender_id,
     sender_short_name,
@@ -3223,6 +3235,20 @@ def add_mail(
 
     if not defer_sync:
         sync_mail_record(unique_id, bbs_nodes, interface)
+
+    try:
+        _notify_new_mail_recipient(
+            sender_short_name,
+            recipient_hex or recipient_id,
+            interface,
+        )
+    except Exception as exc:
+        logging.error(
+            "Failed to notify mail recipient %s: %s",
+            recipient_hex or recipient_id,
+            exc,
+            exc_info=True,
+        )
     return unique_id, recipient_hex or recipient_short_name
 
 

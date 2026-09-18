@@ -46,6 +46,17 @@ Open Mail from the Main Menu with **`M`**, then **`R`** (Read) or **`S`** (Send)
 
 **Send Mail** — Enter the recipient **short name** (or pick from a list when several nodes match). Enter a Subject when prompted, then Body in one or more messages. Send `END` by itself to finish. While you type the body, the BBS will not reply until `END`.
 
+### Mail quick commands
+
+From the **main menu**, you can skip the Mail submenu with TC²-style commands (the main menu text is unchanged):
+
+| Command | Same as |
+|---------|---------|
+| `RM` | Mail → Read → **New** (compact list of unread mail) |
+| `SM` | Mail → **Send** |
+
+When you receive new mail, the BBS may alert you with a short message such as `New mail from RSN1. Send RM to read new mail.`
+
 ## Channel directory
 
 Open the Channel Directory from the Main Menu with **`C`**.

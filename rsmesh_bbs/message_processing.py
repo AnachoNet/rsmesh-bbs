@@ -1,9 +1,13 @@
 import logging
 
 from .command_handlers import (
-    dispatch_main_menu_key, handle_help_command,
-    handle_mail_menu_steps, handle_modules_steps,
-    handle_bb_steps, handle_mail_steps,
+    dispatch_main_menu_key,
+    dispatch_mesh_quick_command,
+    handle_help_command,
+    handle_mail_menu_steps,
+    handle_modules_steps,
+    handle_bb_steps,
+    handle_mail_steps,
     handle_bulletin_delete_steps,
     handle_channel_directory_steps,
 )
@@ -404,6 +408,8 @@ def _handle_user_message(sender_id, message, interface):
 
     on_main_menu = not state or state.get('command') == 'MAIN_MENU'
     if on_main_menu:
+        if dispatch_mesh_quick_command(sender_id, interface, message_lower):
+            return
         if message_lower in _main_menu_keys():
             dispatch_main_menu_key(sender_id, interface, message_lower)
         else:

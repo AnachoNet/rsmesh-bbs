@@ -14,8 +14,6 @@ from .utils import (
     update_user_state, bundle_bulletin_read_list, bundle_mail_inbox_list,
 )
 from .mesh_ui import MAIL_SUBMENU_TEXT, load_main_menu_body
-from .node_resolution import is_hex_node_id
-
 EXIT_PROMPT = "E[X]IT"
 
 
@@ -231,6 +229,46 @@ def _mail_returns_to_submenu():
 
 def handle_read_mail_command(sender_id, interface):
     _show_mail_inbox(sender_id, interface, return_to_mail_menu=_mail_returns_to_submenu())
+
+
+def handle_read_new_mail_quick_command(sender_id, interface):
+    """Quick command RM: jump to the new-mail list (Mail → Read → New)."""
+    sender_node_id = get_node_id_from_num(sender_id, interface)
+    mail = get_mail(sender_node_id, interface)
+    return_to_mail_menu = _mail_returns_to_submenu()
+    if not mail:
+        _show_mail_inbox(
+            sender_id,
+            interface,
+            return_to_mail_menu=return_to_mail_menu,
+        )
+        return
+    filtered = _filter_mail_rows(mail, "new")
+    if not filtered:
+        _show_mail_inbox_summary(
+            sender_id,
+            interface,
+            prefix_messages=["No new messages."],
+            return_to_mail_menu=return_to_mail_menu,
+        )
+        return
+    _show_mail_inbox_list(sender_id, interface, filtered, mail_filter="new")
+
+
+def dispatch_mesh_quick_command(sender_id, interface, command):
+    """Handle TC²-style mail quick commands from the main menu."""
+    from .core_services import is_core_mail_enabled
+
+    if not is_core_mail_enabled():
+        return False
+    text = (command or "").strip().lower()
+    if text == "rm":
+        handle_read_new_mail_quick_command(sender_id, interface)
+        return True
+    if text == "sm":
+        handle_send_mail_command(sender_id, interface)
+        return True
+    return False
 
 
 def handle_send_mail_command(sender_id, interface):
@@ -623,18 +661,6 @@ def handle_mail_steps(sender_id, message, step, state, interface, bbs_nodes):
                 f"Mail has been posted to the mailbox of {recipient_name}.",
                 "Send another message? [Y]es / [N]o",
             ], sender_id, interface)
-
-            notification_message = (
-                f"New mail from {sender_short_name}. Type HELP and press R to read mail."
-            )
-            try:
-                if is_hex_node_id(final_recipient_id):
-                    send_message(notification_message, final_recipient_id, interface)
-            except Exception as e:
-                logging.error(
-                    f"Failed to notify mail recipient {final_recipient_id}: {e}",
-                    exc_info=True,
-                )
         else:
             state['content'] += message + "\n"
             update_user_state(sender_id, state)

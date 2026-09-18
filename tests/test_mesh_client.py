@@ -56,6 +56,28 @@ class TestMeshClientMenus:
         assert "[R]ead Mail" in joined
         assert "[S]end Mail" in joined
 
+    def test_rm_quick_command_lists_new_mail(self, mesh_client):
+        unique_id = str(uuid.uuid4())
+        db_operations.add_mail(
+            "sender-node",
+            "SNDR",
+            mesh_client.client_node_id,
+            "Hello",
+            "Body text",
+            [],
+            None,
+            unique_id=unique_id,
+            from_sync=True,
+            recipient_short_name="COFY",
+        )
+        replies = mesh_client.send_joined("rm")
+        assert "Subj: Hello" in replies
+        assert "from SNDR" in replies
+
+    def test_sm_quick_command_starts_send_flow(self, mesh_client):
+        replies = mesh_client.send_joined("sm")
+        assert "Short Name of the node to message?" in replies
+
     def test_read_mail_shows_message(self, mesh_client):
         unique_id = str(uuid.uuid4())
         db_operations.add_mail(
