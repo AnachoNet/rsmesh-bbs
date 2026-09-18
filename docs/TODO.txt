@@ -47,3 +47,11 @@ TODO for Release 1.2
     - Results are available in admin tool as a list sorted by date/time and grouped by 
       node id
 
+- Bulletin Broadcast to Channel
+    - Associate bulletin boards to programmed radio channels (optional)
+    - Posts prompt for broadcast based on user privs
+    - Where permitted, send post to channel as soon as created
+    - Migrate SysAdmin/Urgent broadcast relationship to this model
+    - Add functionality to pull programmed Channels from radio (as in the Channels section
+      returned by meshtastic --info) in to the Channels table (with default set to not 
+      publish) to admin tool
