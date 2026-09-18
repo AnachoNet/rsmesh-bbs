@@ -344,8 +344,7 @@ Urgent bulletins.  Bug: Bulletin delete in admin: message is truncated:
     UID: 64155208-389b-40d2-bda1-63ed4bc822ed  Del: N  Pinned: N  Reconcile: N
   ID: 7  Poster: RSN1  Subject: News Bulletin RSNA  Date: 2026-09-13 17:29
     UID: 64155208-389b-40d2-bda1-63ed4bc822ed  Del: N  Pinned: N  Reconcile: N
-BUG?: Review reconcile did not show data deleted on distant server.  
-Delete was processed on sync peer without approval.
+Fixed (1.1): Reconcile applies only to bulletins/channels with **Origin: sync** (`from_sync=Y`). Local-origin rows ignore peer delete sync. Re-test **Review Reconcile Bulletins** after peer delete of sync-ingested content.
 ```
 
 ### 3.3 Channels (admin approval)
@@ -359,9 +358,7 @@ Delete was processed on sync peer without approval.
 **Notes:**
 
 ```
-Channels added in admin tool do not display "Publish" prompt.  Default
-to "y".  Channel delete on sync peer skipped in processing for duplicate
-unique id.  Did not appear in reconcile list.
+Fixed (1.1): Add Channel includes Publish prompt; reconcile uses from_sync origin. Re-test channel delete on peer for **sync-ingested** channel only.
 ```
 
 ### 3.4 Mail (admin)
@@ -525,9 +522,7 @@ Goal: verify bidirectional sync, deletes, reconcile, and module wire types. Moni
 **Notes:**
 
 ```
-Delete + reconcile: Distant peer seems to process immediately.  Change
-does not display in review/reconcile, and action is taken on distant
-peer as though change has been approved.
+Fixed (1.1): Peer delete of **local-origin** content on B must not change B. Peer delete of **sync-origin** content on B must soft-delete and appear in Review Reconcile (not immediate hard delete). Verify admin **Origin** column on list/detail.
 ```
 
 ### 5.2 Mail
@@ -553,7 +548,7 @@ peer as though change has been approved.
 **Notes:**
 
 ```
-Review/reconcile issues.
+Re-test with origin rules (1.1): reconcile only for sync-ingested channels; local channels unchanged by peer DELETE_CHANNEL.
 ```
 
 ### 5.4 Mesh nodes (NODES batch, deferred)

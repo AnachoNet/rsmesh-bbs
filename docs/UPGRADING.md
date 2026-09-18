@@ -27,7 +27,7 @@ For a new install with no TC² files, complete venv setup and copy `example_conf
 Pull the 1.1 release, reinstall dependencies when `requirements.txt` changes, and restart the server (or admin tool / mesh client — all call the same upgrade path). On startup:
 
 1. **`config.yml`** — missing 1.1 keys merged from `example_config.yml` (core services, mail layout, interface radio identity fields, schedule defaults)
-2. **Database** — idempotent schema completion to 1.1 (for example `modules.main_menu_visible`, `sync_peer_modules`, and any columns or support tables added since your 1.0 install)
+2. **Database** — idempotent schema completion to 1.1 (for example `modules.main_menu_visible`, `sync_peer_modules`, `bulletins.from_sync`, `channels.from_sync`, `sync_peers.allow_resync`, resync queue tables, and any other columns or support tables added since your 1.0 install). Existing bulletin and channel rows receive **`from_sync='N'`** (treated as **locally originated** for delete/reconcile policy until re-ingested from a peer). Existing sync peers default **`allow_resync='Y'`**.
 3. **`sys_config`** — required keys seeded from `config.yml` / `example_config.yml` (including `bbs.database_version`)
 4. **Modules** — new default modules (for example BBS List) added without disturbing existing rows
 5. **Main menu** — `mesh_ui/main_menu.txt` regenerated when an existing database is upgraded to 1.1

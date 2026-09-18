@@ -23,6 +23,7 @@ Reference for contributors and module authors: repository layout, tests, the mod
   - [Reference modules](#reference-modules)
   - [Testing a new module](#testing-a-new-module)
 - [Sync wire formats](#sync-wire-formats)
+  - [Record origin and peer resync (implementation)](#record-origin-and-peer-resync-implementation)
   - [rsv1 sync message examples](#rsv1-sync-message-examples)
     - [Envelope](#envelope)
     - [BULLETIN](#bulletin)
@@ -31,6 +32,7 @@ Reference for contributors and module authors: repository layout, tests, the mod
     - [DELETE_BULLETIN](#delete_bulletin)
     - [DELETE_MAIL](#delete_mail)
     - [DELETE_CHANNEL](#delete_channel)
+    - [RESYNC_REQUEST](#resync_request)
     - [NODES](#nodes)
     - [CHUNK (transport wrapper)](#chunk-transport-wrapper)
     - [Quick reference](#quick-reference)
@@ -418,6 +420,14 @@ RSMesh BBS supports two peer sync protocol families. Choose the protocol per syn
 
 **rsv1** (and later **rsvN**) uses compact JSON keys (for example bulletin `b`, `sn`, `sub`, `body`, `uid`, `pin`). The digit `N` matches the peer protocol label (`rsv1` → `RS|1|…`). Inbound RS messages accept version fallback when wire and configured versions differ; mismatches surface as **Sync alerts** in the admin tool. See [rsv1 sync message examples](#rsv1-sync-message-examples) below. Peer sync flags are configured in the [Sysop Guide](RSMESH-BBS-SYSOP-GUIDE.md#sync-peers).
 
+### Record origin and peer resync (implementation)
+
+**Origin columns** — `bulletins.from_sync` and `channels.from_sync` (`Y`/`N`, default **`N`**). Set **`Y`** on sync ingest (`add_*` / `from_sync=True`, rsv1 bulletin ingest). Local mesh/admin creates stay **`N`**. Inbound **`DELETE_BULLETIN`** / **`DELETE_CHANNEL`** mark reconcile only when **`from_sync='Y'`**; peer deletes ignore local-origin rows. **`restore_reconcile_*`** clears reconcile and sets **`from_sync='N'`** (kept post is local-owned). Upgraded databases backfill **`from_sync='N'`** on existing rows (see [UPGRADING.md](UPGRADING.md)).
+
+**Resync** — `sync_peers.allow_resync` (default **`Y`**). Inbound **`RESYNC_REQUEST`** (handled in `message_processing.py`, logic in `rsmesh_bbs/peer_resync.py`) checks the requester’s peer row; if allowed, enqueues rate-limited outbound replay per enabled sync flags. Admin **Request Resync** inserts into **`pending_resync_requests`**; the server sync worker sends the wire message and the peer responds with replay. Tables: **`pending_resync_requests`**, **`peer_resync_outbound`** (job cursor).
+
+**Mesh prompt redisplay** — `record_user_display()` in `utils.py` caches the last user-facing message list per destination; mesh users send **`??`** to replay without advancing state (`redisplay_last_user_prompt()`).
+
 ### rsv1 sync message examples
 
 Examples of every **rsv1** peer sync message on the mesh wire. These samples were generated from the encode functions in `rsmesh_bbs/sync_wire.py`. On the wire, JSON is compact (no spaces); pretty JSON is shown below for readability.
@@ -624,5 +634,6 @@ RS|1|CHUNK|{"u":"95f49967-6bc2-4e9c-b970-0eb671154b02","i":0,"n":4,"p":"RS|1|BUL
 | `DELETE_BULLETIN` | `uid` | No |
 | `DELETE_MAIL` | `uid` | No |
 | `DELETE_CHANNEL` | `uid` | Yes |
+| `RESYNC_REQUEST` | _(empty object)_ | Yes |
 | `NODES` | `n` (array of `id`, `sn`, `ln`, `lh`) | Yes |
 | `CHUNK` | `u`, `i`, `n`, `p` | Yes (transport) |

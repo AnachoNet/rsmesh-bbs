@@ -146,7 +146,7 @@ The `client` section is your simulated handset. The `server` section is the mock
 
 Command-line flags override `client` values from `config_client.yml` when you need a one-off handset identity. Virtual BBS radio settings are read from the config file only. The board banner still comes from `config.yml` in the project directory (see [Configuration reference](#configuration-reference)).
 
-Type messages as you would from a handset (single-letter menu commands such as `B`, `M`, `R`). See the [User Guide](RSMESH-BBS-USER-GUIDE.md) for menus and flows. Press Enter or type `X` for the main menu. Ctrl+C or Ctrl+D to quit.
+Type messages as you would from a handset (single-letter menu commands such as `B`, `M`, `R`). See the [User Guide](RSMESH-BBS-USER-GUIDE.md) for menus and flows. Press Enter or type `X` for the main menu. Send **`??`** to redisplay the last BBS prompt (or the main menu if none yet). Ctrl+C or Ctrl+D to quit.
 
 The pytest `mesh_client` fixture in `tests/conftest.py` uses the same harness against a temporary database. See [Tests](RSMESH-BBS-DEVELOPER-GUIDE.md#tests) in the Developer Guide.
 
@@ -679,7 +679,7 @@ RS version alerts appear when a peer sends a sync wire version that does not mat
 |--------|---------|----------------------|
 | `BBS node (e.g. !17d7e4b7):` | — | Required Meshtastic node ID |
 | `BBS name (optional):` | empty | Display name for lists |
-| `Allow resync (Y/N) [Y]:` | Y | When **`Y`**, this peer may send **`RESYNC_REQUEST`** and your server will replay outbound sync to them (rate-limited). Set **`N`** on untrusted or airtime-sensitive peers. **rsv1** only in practice; tc2 never sends resync requests. |
+| `Allow resync (Y/N) [Y]:` | Y | When **`Y`**, **your BBS accepts `RESYNC_REQUEST` from this peer’s node** and replays outbound sync **to them** (rate-limited). When **`N`**, ignore their resync requests. This does not block **you** from using [Request Resync](#request-resync) to ask **their** BBS for a replay. **rsv1** only; tc2 never sends resync requests. |
 | `Sync protocol (tc2/rsv1) [tc2]:` | `tc2` | **`tc2`** or **`rsv1`** |
 | `Sync bulletins out (Y/N) [Y]:` | Y | Send bulletins to this peer |
 | `Sync mail in/out (Y/N) [Y]:` | Y | Bidirectional mail sync |
@@ -957,6 +957,12 @@ Select: `Enter ID(s) or X=cancel:` — comma-separated IDs allowed.
 
 **Hard delete** (record removed immediately). The running server syncs deletes to peers.
 
+### Mesh new-mail notifications
+
+When mail is **created on this BBS** (mesh user **Send Mail**, admin **Send Mail**, or local ingest paths that are not `from_sync`), the server may send the recipient a short direct message: `New mail from {short}. Send RM to read new mail.`
+
+**Mail ingested from sync peers is not notified** — the recipient’s home BBS already handled delivery on the originating system. There is no config toggle for this distinction; it is built into `add_mail(..., from_sync=False)` only.
+
 ---
 
 ## Node Catalog
@@ -1198,6 +1204,12 @@ Splash Screen
     │   ├── 3. Regenerate Main Menu
     │   ├── 4. Sysadmin Nodes
     │   ├── 5. Sync Peers
+    │   │   ├── 1. List Sync Peers
+    │   │   ├── 2. Add Sync Peer
+    │   │   ├── 3. Edit Sync Peer
+    │   │   ├── 4. Delete Sync Peer
+    │   │   ├── 5. Request Resync (rsv1)
+    │   │   └── 6. List Unsynced Data
     │   ├── 6. Modules
     │   │   ├── Suppress Modules Submenu
     │   │   ├── [Node Info] → List Node Info

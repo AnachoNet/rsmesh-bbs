@@ -20,7 +20,7 @@ Open features from the main menu with the keys described below.
 
 **Mail** (`M`) — [Mail](#mail): Read mail sent to your device, or send mail to other devices.
 
-**Modules** (`O`) — Optional modules enabled by the operator (for example Fortune or Node Info). Module names, menu keys, and actions vary by system.
+**Modules** (`O`) — Optional modules enabled by the operator (for example Fortune, Node Info, or **BBS List**). Module names, menu keys, and actions vary by system. See [Modules](#modules) below.
 
 **Exit** (`X`) — Return to the Main Menu (also available from Sub-Menus as E[X]IT).
 
@@ -57,7 +57,7 @@ From the **main menu**, you can skip the Mail submenu with TC²-style commands (
 | `RM` | Mail → Read → **New** (compact list of unread mail) |
 | `SM` | Mail → **Send** |
 
-When you receive new mail, the BBS may alert you with a short message such as `New mail from RSN1. Send RM to read new mail.`
+When **new mail is delivered on this BBS** (someone sent to you from the mesh or admin), you may get a short direct message such as `New mail from RSN1. Send RM to read new mail.` Mail that arrived **only via sync from another board** does not trigger this alert.
 
 ## Channel directory
 
@@ -67,9 +67,24 @@ Open the Channel Directory from the Main Menu with **`C`**.
 
 **Post** (`P`) — Submit a Channel Name and Public Key (PSK) for operator review. Posts are visible after SysAdmin approval.
 
+## Modules
+
+Open **M[o]dules** from the main menu, then choose a module by its key.
+
+### BBS List (when enabled)
+
+Default menu key **`L`**. Entry menu: **`[A]ll`**, **`[S]ync-Interested`**, **`E[X]IT`**.
+
+- **All** — Every directory entry (list ID, short name, board name, node ID, location; `*` marks sync-interested boards).
+- **Sync-Interested** — Entries the operator flagged for the sync-interested filter only.
+
+After a list, **`Enter list ID for details`**, then **`[R]eturn`** to the list-type menu or **`E[X]IT`** to the main menu.
+
 ## Shared Information
 
 Bulletins, channels, and mail you see on a BBS may have been posted on that system or shared from another BBS on the mesh. What is available can vary from one BBS to another.
+
+If a **remote board deletes** a bulletin or channel you still carry, your sysop may see a **reconcile** prompt only for content that **came from sync**. **Posts you (or your sysop) created on this BBS** are not removed just because a peer deleted their copy.
 
 ## SysAdmin Capabilities on the Mesh
 

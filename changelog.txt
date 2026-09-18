@@ -102,10 +102,23 @@ Sync (rsv1)
   - Pinned bulletins sync via rsv1 pin field
   - Module sync inbound state documented (record_sync_peers marking rules)
   - Protocol differences documented in docs/RSMESH-BBS-DEVELOPER-GUIDE.md
+  - Record origin (from_sync on bulletins/channels): peer delete reconcile only for sync-ingested rows; restore sets local origin
+  - rsv1 DELETE_BULLETIN uses reconcile (no longer hard-delete by UUID) when from_sync=Y
+  - RESYNC_REQUEST wire message; sync_peers.allow_resync; admin Request Resync queues replay (rate-limited)
+
+Mesh user interface (1.1 updates)
+  - Mail quick commands RM and SM from main menu (unchanged main menu banner text)
+  - Read Mail: summary line, New/All filter, compact multi-line list (up to three messages per packet)
+  - New-mail DM notification to recipient (local delivery only; not for sync-ingested mail); text suggests RM
+  - ?? redisplays last menu/prompt; main menu when no prior reply
+  - BBS List module: All/Sync-Interested entry, list ID browse, Return/Exit navigation
 
 Admin UI
   - begin_form_screen / finish_action_message flow for module and core form confirmations
   - Developer guide documents admin_ui selectable list pattern for edit/delete flows
+  - Add Channel prompts for Publish (Y/N); confirmation text wraps at 70 columns (word-safe)
+  - List bulletins/channels show Origin (local/sync); sync peers show Resync Y/N and Allow resync prompt
+  - Sync Peers menu: Request Resync (rsv1 peers; server sends queued RESYNC_REQUEST)
 
 Release upgrade (1.0 -> 1.1)
   - release_migration.py: prepare_release_upgrade, migrate_release_database,
