@@ -1,6 +1,6 @@
 # RSMesh BBS Developer Guide
 
-Release 1.1
+Release 1.2
 
 Reference for contributors and module authors: repository layout, tests, the module framework, and peer sync wire formats.
 

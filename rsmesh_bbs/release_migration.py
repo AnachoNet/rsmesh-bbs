@@ -16,8 +16,9 @@ from .version import VERSION
 
 RELEASE_1_0 = "1.0"
 RELEASE_1_1 = "1.1"
+RELEASE_1_2 = "1.2"
 
-RELEASE_ORDER = (RELEASE_1_0, RELEASE_1_1)
+RELEASE_ORDER = (RELEASE_1_0, RELEASE_1_1, RELEASE_1_2)
 
 _pending_finalize = False
 

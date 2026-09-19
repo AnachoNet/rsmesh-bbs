@@ -1,6 +1,6 @@
 # RSMesh BBS
 
-Release 1.1
+Release 1.2
 
 A Meshtastic bulletin board system with mail, channels, peer sync, and an admin tool.
 

@@ -1,6 +1,6 @@
 # RSMesh BBS Sysop Guide
 
-Release 1.1
+Release 1.2
 
 ## Table of contents
 

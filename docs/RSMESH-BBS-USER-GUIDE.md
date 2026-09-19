@@ -1,6 +1,6 @@
 # RSMesh BBS User Guide
 
-Release 1.1
+Release 1.2
 
 How to interact with the BBS from a Meshtastic handset.
 

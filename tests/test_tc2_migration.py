@@ -1,11 +1,8 @@
 import yaml
 
 from rsmesh_bbs import db_operations
-from rsmesh_bbs.release_migration import (
-    RELEASE_1_1,
-    apply_database_upgrades,
-    get_stored_database_version,
-)
+from rsmesh_bbs.release_migration import apply_database_upgrades, get_stored_database_version
+from rsmesh_bbs.version import VERSION
 from rsmesh_bbs.release_migration import ensure_release_1_1_schema
 from rsmesh_bbs.tc2_migration import (
     import_tc2_sync_peers_from_ini,
@@ -180,7 +177,7 @@ class TestTc2ToReleaseMigration:
         db_operations.initialize_database(quiet=True)
         apply_database_upgrades()
 
-        assert get_stored_database_version(c) == RELEASE_1_1
+        assert get_stored_database_version(c) == VERSION
         assert c.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_peer_modules'"
         ).fetchone() is not None

@@ -1,6 +1,6 @@
 # Upgrading
 
-Release 1.1
+Release 1.2
 
 ## Upgrading from TC²
 

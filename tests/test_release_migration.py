@@ -50,7 +50,7 @@ class TestReleaseMigration:
 
         assert migrate_release_database(c) is True
         conn.commit()
-        assert get_stored_database_version(c) == RELEASE_1_1
+        assert get_stored_database_version(c) == VERSION
 
     def test_skips_data_migration_for_empty_legacy_database(self, temp_db):
         conn = db_operations.get_db_connection()
@@ -62,7 +62,7 @@ class TestReleaseMigration:
 
         assert migrate_release_database(c) is True
         conn.commit()
-        assert get_stored_database_version(c) == RELEASE_1_1
+        assert get_stored_database_version(c) == VERSION
 
     def test_migrates_when_stored_version_is_1_0(self, temp_db):
         conn = db_operations.get_db_connection()
@@ -72,7 +72,7 @@ class TestReleaseMigration:
 
         assert migrate_release_database(c) is True
         conn.commit()
-        assert get_stored_database_version(c) == RELEASE_1_1
+        assert get_stored_database_version(c) == VERSION
 
     def test_prepare_release_upgrade_merges_missing_config_keys(self, tmp_path, monkeypatch):
         config_path = tmp_path / "config.yml"
@@ -123,7 +123,7 @@ class TestReleaseMigration:
         assert c.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_peer_modules'"
         ).fetchone() is not None
-        assert get_stored_database_version(c) == RELEASE_1_1
+        assert get_stored_database_version(c) == VERSION
 
     def test_ensure_release_1_1_schema_is_idempotent(self, temp_db):
         conn = db_operations.get_db_connection()

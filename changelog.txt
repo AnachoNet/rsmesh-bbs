@@ -1,8 +1,11 @@
 RSMesh BBS Changelog
 ====================
 
-Release 1.1 (in development)
+Release 1.2 (in development)
 ------------------------------
+
+Release 1.1
+-----------
 
 Mesh user interface
   - Main menu layout: [B]ulletins / [C]hannels, [M]ail / M[O]dules, E[X]IT

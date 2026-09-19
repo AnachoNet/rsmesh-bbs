@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from .config_init import DEFAULT_CONFIG_FILE
-from .version import BBS_DB_FILE
+from .version import BBS_DB_FILE, VERSION
 
 TC2_DB_FILE = "bulletins.db"
 TC2_INI_FILE = "config.ini"
@@ -157,7 +157,7 @@ def migrate_tc2_database(c):
     if not needs_tc2_database_migration(c):
         return False
 
-    logging.info("Migrating stock TC2 database schema to RSMesh-BBS release %s.", "1.1")
+    logging.info("Migrating stock TC2 database schema to RSMesh-BBS release %s.", VERSION)
     if _table_exists(c, "channels") and "url" in _table_columns(c, "channels"):
         _migrate_tc2_channels_url_to_psk(c)
     _create_rsmesh_tables(c)
