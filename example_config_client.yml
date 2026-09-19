@@ -1,5 +1,6 @@
 ####################################
 ##  RSMesh-BBS Client Configuration ##
+##            Version 1.1           ##
 ####################################
 
 # Simulated handset identity for rsmesh-bbs_client.py.
@@ -11,4 +12,10 @@ client:
   # Four-character short name shown in BBS prompts and mail headers
   short_name: COFY
   # Full display name for the simulated handset
-  long_name: CLI Test User
+  long_name: BBS Test Client
+
+# Simulated BBS radio identity for in-process testing (no real mesh).
+server:
+  virtual_node_id: "!aabbcc00"
+  virtual_short_name: BBS0
+  virtual_long_name: RSMesh Virtual Radio

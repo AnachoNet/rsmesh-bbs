@@ -1,0 +1,147 @@
+RSMesh BBS Changelog
+====================
+
+Release 1.1 (in development)
+------------------------------
+
+Mesh user interface
+  - Main menu layout: [B]ulletins / [C]hannels, [M]ail / M[O]dules, E[X]IT
+  - Read Mail and Send Mail moved under [M]ail submenu ([R] / [S])
+  - Modules aggregator key changed from M to O (M[o]dules)
+  - Main menu option rows cached in mesh_ui/main_menu.txt (title line built at display time)
+  - Startup preserves a valid custom main_menu.txt; auto-generates only when missing or invalid
+  - Disabled core services are hidden from the mesh main menu; their keys are free for modules
+  - Empty mail inbox returns to the mail submenu instead of the main menu
+  - Per-module main_menu_visible flag promotes module keys to the main menu
+  - bbs.suppress_modules_menu hides the M[o]dules aggregator when all enabled modules are promoted
+  - M[o]dules hidden when no enabled modules need the aggregator submenu
+  - Invalid or oversized main_menu.txt falls back to auto-generated body (200-byte mesh limit)
+  - Admin: Regenerate Main Menu; Edit Module Flags includes Show on main menu
+  - Admin: System Status [V]iew server log (tails admin.server_log_file; Ctrl-C returns to status)
+  - admin.server_log_file config for server file logging and admin log follow (all platforms)
+  - Module menu_option reserved only for main-menu conflicts (O/X always; B/C/M when core service on); submenu keys are per-menu
+  - Optional mail on main menu: Core Services -> Display Mail commands on Main Menu shows [R]ead Mail / [S]end Mail on the main menu and omits [M]ail (bbs.mail_commands_on_main_menu)
+
+Module sync (Phase A)
+  - ModuleSyncRegistration and ctx.register_sync for optional peer sync hooks
+  - Inbound RS wire dispatch from message_processing when module enabled (rsv1 only)
+  - Outbound sync_pending dispatch from sync_pending_records background worker
+  - Helpers in rsmesh_bbs.module_sync for record_sync_peers pending/synced state
+  - Developer guide: Peer sync (Phase A) section
+
+Module sync (Phase B1/B2)
+  - sync_peer_modules table for per-peer module sync_out and ingest_in flags
+  - Defaults: no row means allow; tc2 peers cannot participate in module sync
+  - peer_sync_enabled / peer_accepts_inbound_sync honor module flags when interface is provided
+
+Module sync (Phase B3)
+  - Admin Add/Edit Sync Peer prompts for per-module sync out and ingest in (rsv1 peers)
+  - Lists only modules that register sync hooks at load time
+  - Enabled prompt is last on add/edit; module sync flags persist correctly
+
+Module sync (Phase B4)
+  - List Sync Peers shows per-module sync restrictions for rsv1 peers (out=N / in=N only)
+  - List Sync Peers shows Modules: Y/N when any per-module sync flags are configured (rsv1)
+
+Module sync (Phase B5)
+  - list_unsynced registration hook for module-owned unsynced records
+  - List Unsynced Data includes a Modules section when hooks report pending peers
+  - get_module_sync_status / sync_status_lines hook for per-module sync status views
+  - Admin splash and System Status show sync alert summary (RS version + module peer counts)
+
+Module sync (Phase C)
+  - BBS List module (bbs_list): directory of boards with sync interest flag (mesh display only; all entries sync to peers)
+  - rsv1 BBS_LIST_SYNC wire sync with server log lines for send/receive
+  - Inbound wire updates ignored for local entries (is_local=Y); prevents false synced state
+  - Integer list IDs; separate admin vs mesh line formats
+  - mesh browse; SysAdmin add/edit/delete with paginated ID selection
+
+Mesh nodes sync (rsv1)
+  - Replaced single NODE messages with batched NODES wire type
+  - Packs multiple nodes per message (200-byte limit; CHUNK when larger)
+  - Dedupes duplicate node IDs per batch (newest last_heard wins)
+  - Deferred ~90 seconds after bulletins, mail, channels, and module sync each peer-sync cycle
+
+Module sync wire types
+  - Modules register wire_suffixes; framework expands to {MODULE_DIR}_{SUFFIX}
+  - record_type must be module:<module_dir>; duplicate wire types rejected at load
+  - ctx.sync_wire_type(suffix) helper for outbound RS messages
+
+Configuration and module API
+  - get_board_name() reads bbs.board_name from sys_config (config.yml fallback)
+  - Type-aware System Configuration editors (bool, int, enum, node_id, short_name)
+  - interface.node_id, short_name, long_name in sys_config and example_config.yml
+  - get_bbs_info() / ctx.get_bbs_info() for read-only board and radio identity
+  - ctx.register_config() and ctx.get_config() for module-scoped sys_config keys
+
+Mesh client (rsmesh-bbs_client.py)
+  - --verbose / -v: print (no reply) when the BBS sends no response (default silent)
+  - config_client.yml server section: virtual_node_id, virtual_short_name, virtual_long_name
+    for the in-process mock BBS radio (defaults: !aabbcc00, BBS0, RSMesh Virtual Radio)
+  - client.long_name default BBS Test Client (example_config_client.yml)
+  - Sysop guide documents handset (client) and virtual radio (server) identity
+
+Admin System Configuration
+  - Section menus for BBS, Interface, and Schedule with key = value rows
+  - Edit value only; required keys from example_config.yml seeded on startup
+  - Export writes schema-ordered config.yml; missing yaml keys merged from example defaults
+  - Edits return to the current section menu instead of the top-level list
+
+Core Services (admin)
+  - Administration -> Core Services toggles for Bulletins, Mail, and Channels
+  - Core Services option 4: Display Mail commands on Main Menu (bbs.mail_commands_on_main_menu; default off)
+  - Settings stored in sys_config (bbs.core_bulletins, bbs.core_mail, bbs.core_channels)
+  - Seeded from config.yml; missing keys added on upgrade (default enabled)
+  - Admin main menu hides Bulletins / Channels / Mail entries when the service is off
+  - Disabled services skip inbound/outbound peer sync and scheduled purge for that type
+  - List Unsynced Data omits record types for disabled core services
+  - Admin splash and System Status show which core services are enabled
+
+Sync (rsv1)
+  - Bulletin ingest upserts by unique_id (tc2 remains insert-only)
+  - Pinned bulletins sync via rsv1 pin field
+  - Module sync inbound state documented (record_sync_peers marking rules)
+  - Protocol differences documented in docs/RSMESH-BBS-DEVELOPER-GUIDE.md
+  - Record origin (from_sync on bulletins/channels): peer delete reconcile only for sync-ingested rows; restore sets local origin
+  - rsv1 DELETE_BULLETIN uses reconcile (no longer hard-delete by UUID) when from_sync=Y
+  - RESYNC_REQUEST wire message; sync_peers.allow_resync; admin Request Resync queues replay (rate-limited)
+
+Mesh user interface (1.1 updates)
+  - Mail quick commands RM and SM from main menu (unchanged main menu banner text)
+  - Read Mail: summary line, New/All filter, compact multi-line list (up to three messages per packet)
+  - New-mail DM notification to recipient (local delivery only; not for sync-ingested mail); text suggests RM
+  - ?? redisplays last menu/prompt; main menu when no prior reply
+  - BBS List module: All/Sync-Interested entry, list ID browse, Return/Exit navigation
+
+Admin UI
+  - begin_form_screen / finish_action_message flow for module and core form confirmations
+  - Developer guide documents admin_ui selectable list pattern for edit/delete flows
+  - Add Channel prompts for Publish (Y/N); confirmation text wraps at 70 columns (word-safe)
+  - List bulletins/channels show Origin (local/sync); sync peers show Resync Y/N and Allow resync prompt
+  - Sync Peers menu: Request Resync (rsv1 peers; server sends queued RESYNC_REQUEST)
+
+Release upgrade (1.0 -> 1.1)
+  - release_migration.py: prepare_release_upgrade, migrate_release_database,
+    finalize_release_upgrade; stores bbs.database_version in sys_config
+  - Server, admin, and client call the upgrade path on startup
+  - Legacy installs with existing data trigger 1.1 schema completion and main menu regen
+  - TC2 and 1.0 upgrades share the same 1.1 schema completion step (ensure_tc2_upgrade_schema)
+  - docs/UPGRADING.md documents TC2, 1.0, and shared schema completion
+
+Documentation
+  - Sysop guide: docs/RSMESH-BBS-SYSOP-GUIDE.md (renamed from README-ADMIN.md)
+  - Developer guide: docs/RSMESH-BBS-DEVELOPER-GUIDE.md
+  - Mesh user guide: docs/RSMESH-BBS-USER-GUIDE.md
+  - Module development merged into docs/RSMESH-BBS-DEVELOPER-GUIDE.md
+  - Planned enhancements tracked in docs/TODO.txt
+
+Release 1.0
+-----------
+
+Initial RSMesh BBS release (fork/evolution of TC2-BBS concepts)
+  - Mesh mail, bulletins (General/Info/News/Urgent), and channel directory
+  - tc2 and rsv1 peer sync, sync peer admin, reconcile workflows
+  - Module framework (Node Info, Fortune, Example Hello)
+  - Mesh client (rsmesh-bbs_client.py) for handset testing without radio
+  - Admin tool with bulletins, mail, channels, mesh nodes, node catalog, backup
+  - TC2 database/config migration path

@@ -5,12 +5,19 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 
 from .version import BBS_DB_FILE
-from .config_init import DEFAULT_CONFIG_FILE, export_sys_config_to_yaml, flatten_yaml_config, load_config
+from .config_init import (
+    DEFAULT_CONFIG_FILE,
+    export_sys_config_to_yaml,
+    flatten_yaml_config,
+    is_sys_config_key_protected,
+    load_config,
+    load_example_config_defaults,
+)
 from .sqlite_config import configure_sqlite_connection
-from .tc2_migration import migrate_tc2_database
 from .utils import (
     send_bulletin_to_sync_peers,
     send_delete_bulletin_to_sync_peers,
@@ -45,10 +52,11 @@ PEER_SYNC_FLAG_COLUMNS = {
 PEER_ROW_SELECT = (
     "id, bbs_node, bbs_name, sync_protocol, last_heard, "
     "sync_bulletins, sync_mail, sync_channels, sync_mesh_nodes, ingest_bulletins, ingest_channels, "
-    "rs_version_alert, rs_wire_version_seen, enabled"
+    "rs_version_alert, rs_wire_version_seen, enabled, allow_resync"
 )
 
 PEER_ENABLED_INDEX = 13
+PEER_ALLOW_RESYNC_INDEX = 14
 
 
 def _peer_id_for_bbs_node(bbs_node):
@@ -74,6 +82,93 @@ def _resolve_peer_id(peer):
     c.execute("SELECT id FROM sync_peers WHERE bbs_node = ?", (bbs_node,))
     row = c.fetchone()
     return row[0] if row else None
+
+
+def get_sync_peer_module_flags(peer_id, module_id):
+    try:
+        peer_id = int(peer_id)
+        module_id = int(module_id)
+    except (TypeError, ValueError):
+        return 'Y', 'Y'
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT sync_out, ingest_in FROM sync_peer_modules "
+        "WHERE peer_id = ? AND module_id = ?",
+        (peer_id, module_id),
+    )
+    row = c.fetchone()
+    if row is None:
+        return 'Y', 'Y'
+    return _normalize_sync_flag(row[0]), _normalize_sync_flag(row[1])
+
+
+def set_sync_peer_module_flags(peer_id, module_id, sync_out='Y', ingest_in='Y', persist=False):
+    try:
+        peer_id = int(peer_id)
+        module_id = int(module_id)
+    except (TypeError, ValueError):
+        return False
+    sync_out = _normalize_sync_flag(sync_out)
+    ingest_in = _normalize_sync_flag(ingest_in)
+    if sync_out == 'Y' and ingest_in == 'Y' and not persist:
+        return delete_sync_peer_module_flags(peer_id, module_id)
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO sync_peer_modules (peer_id, module_id, sync_out, ingest_in) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(peer_id, module_id) DO UPDATE SET "
+        "sync_out = excluded.sync_out, ingest_in = excluded.ingest_in",
+        (peer_id, module_id, sync_out, ingest_in),
+    )
+    conn.commit()
+    return True
+
+
+def delete_sync_peer_module_flags(peer_id, module_id):
+    try:
+        peer_id = int(peer_id)
+        module_id = int(module_id)
+    except (TypeError, ValueError):
+        return False
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "DELETE FROM sync_peer_modules WHERE peer_id = ? AND module_id = ?",
+        (peer_id, module_id),
+    )
+    conn.commit()
+    return c.rowcount > 0
+
+
+def clear_sync_peer_module_flags(peer_id):
+    try:
+        peer_id = int(peer_id)
+    except (TypeError, ValueError):
+        return False
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM sync_peer_modules WHERE peer_id = ?", (peer_id,))
+    conn.commit()
+    return True
+
+
+def get_sync_peer_module_flags_for_peer(peer_id):
+    try:
+        peer_id = int(peer_id)
+    except (TypeError, ValueError):
+        return {}
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT module_id, sync_out, ingest_in FROM sync_peer_modules WHERE peer_id = ?",
+        (peer_id,),
+    )
+    return {
+        int(row[0]): (_normalize_sync_flag(row[1]), _normalize_sync_flag(row[2]))
+        for row in c.fetchall()
+    }
 
 
 def _get_synced_peer_ids(record_type, record_key):
@@ -103,13 +198,19 @@ def _count_synced_peers_for_record(record_type, record_key):
     return c.fetchone()[0]
 
 
+def _core_sync_enabled(record_type):
+    from .core_services import is_core_sync_enabled
+
+    return is_core_sync_enabled(record_type)
+
+
 def _normalize_sync_flag(value, default='Y'):
     normalized = (value or default).strip().upper()
     return 'Y' if normalized == 'Y' else 'N'
 
 
-def _get_pending_peers(record_type, record_key, all_peers):
-    eligible_peers = filter_peers_for_record_type(all_peers, record_type)
+def _get_pending_peers(record_type, record_key, all_peers, interface=None):
+    eligible_peers = filter_peers_for_record_type(all_peers, record_type, interface)
     synced_peer_ids = _get_synced_peer_ids(record_type, record_key)
     pending = []
     for peer in eligible_peers:
@@ -230,10 +331,10 @@ def get_sync_status_label(record_type, record_key):
     return f'{synced_count}/{peer_count}'
 
 
-def _get_pending_peer_labels(record_type, record_key, all_peers):
+def _get_pending_peer_labels(record_type, record_key, all_peers, interface=None):
     synced_peer_ids = _get_synced_peer_ids(record_type, record_key)
     labels = []
-    for peer in filter_peers_for_record_type(all_peers, record_type):
+    for peer in filter_peers_for_record_type(all_peers, record_type, interface):
         peer_id = _resolve_peer_id(peer)
         if peer_id is None or peer_id not in synced_peer_ids:
             name = peer[2] if len(peer) > 2 and peer[2] else peer[1]
@@ -250,8 +351,8 @@ def _mark_record_synced(table, id_column, id_value):
     conn.commit()
 
 
-def _sync_record_to_peers(record_type, record_key, id_column, id_value, peers, send_fn):
-    pending = _get_pending_peers(record_type, record_key, peers)
+def _sync_record_to_peers(record_type, record_key, id_column, id_value, peers, send_fn, interface=None):
+    pending = _get_pending_peers(record_type, record_key, peers, interface)
     if not pending:
         _update_aggregate_synced(record_type, id_column, id_value, record_key)
         return True
@@ -269,7 +370,7 @@ def _sync_record_to_peers(record_type, record_key, id_column, id_value, peers, s
         _mark_peers_synced(record_type, record_key, resolved_ids)
 
     _update_aggregate_synced(record_type, id_column, id_value, record_key)
-    remaining = _get_pending_peers(record_type, record_key, peers)
+    remaining = _get_pending_peers(record_type, record_key, peers, interface)
     return not remaining
 
 
@@ -288,10 +389,10 @@ def _complete_local_sync(table, id_column, id_value, record_key, sync_peers, int
     if not peers:
         _mark_record_synced(table, id_column, id_value)
         return
-    if _sync_record_to_peers(table, record_key, id_column, id_value, peers, send_fn):
+    if _sync_record_to_peers(table, record_key, id_column, id_value, peers, send_fn, interface):
         logging.info(f"Synced {table} {record_key} to all peers.")
     else:
-        pending_labels = _get_pending_peer_labels(table, record_key, peers)
+        pending_labels = _get_pending_peer_labels(table, record_key, peers, interface)
         logging.warning(
             f"Sync not complete for {table} {record_key}; pending peers: {', '.join(pending_labels)}."
         )
@@ -327,111 +428,160 @@ def sync_pending_records(sync_peers, interface):
 
     conn = get_db_connection()
     c = conn.cursor()
-    bulletin_clause = _record_needs_peer_sync_clause('bulletins', 'b', 'unique_id')
 
-    c.execute(
-        f"SELECT board, sender_short_name, subject, content, unique_id, pinned FROM bulletins b "
-        f"WHERE deleted = 'N' AND {bulletin_clause} ORDER BY b.id",
-        ('bulletins',),
-    )
-    for board, sender_short_name, subject, content, unique_id, pinned in c.fetchall():
-        def _send_bulletin(pending_peers):
-            return send_bulletin_to_sync_peers(
-                board,
-                sender_short_name,
-                subject,
-                content,
-                unique_id,
-                pending_peers,
-                interface,
-                pinned=pinned or "N",
-            )
+    if _core_sync_enabled('bulletins'):
+        bulletin_clause = _record_needs_peer_sync_clause('bulletins', 'b', 'unique_id')
+        c.execute(
+            f"SELECT board, sender_short_name, subject, content, unique_id, pinned FROM bulletins b "
+            f"WHERE deleted = 'N' AND {bulletin_clause} ORDER BY b.id",
+            ('bulletins',),
+        )
+        for board, sender_short_name, subject, content, unique_id, pinned in c.fetchall():
+            def _send_bulletin(pending_peers):
+                return send_bulletin_to_sync_peers(
+                    board,
+                    sender_short_name,
+                    subject,
+                    content,
+                    unique_id,
+                    pending_peers,
+                    interface,
+                    pinned=pinned or "N",
+                )
 
-        if _sync_record_to_peers('bulletins', unique_id, 'unique_id', unique_id, peers, _send_bulletin):
-            logging.info(f"Synced bulletin {unique_id} to all peers.")
-        else:
-            logging.warning(f"Bulletin {unique_id} sync incomplete; will retry pending peers.")
+            if _sync_record_to_peers(
+                'bulletins', unique_id, 'unique_id', unique_id, peers, _send_bulletin, interface,
+            ):
+                logging.info(f"Synced bulletin {unique_id} to all peers.")
+            else:
+                logging.warning(f"Bulletin {unique_id} sync incomplete; will retry pending peers.")
 
-    mail_clause = _record_needs_peer_sync_clause('mail', 'm', 'unique_id')
-    c.execute(
-        f"SELECT sender, sender_short_name, recipient, recipient_short_name, subject, content, unique_id "
-        f"FROM mail m WHERE {mail_clause} ORDER BY m.id",
-        ('mail',),
-    )
-    for sender_id, sender_short_name, recipient_id, recipient_short_name, subject, content, unique_id in c.fetchall():
-        def _send_mail(pending_peers):
-            return send_mail_to_bbs_nodes(
-                sender_id, sender_short_name, recipient_id, recipient_short_name,
-                subject, content, unique_id, pending_peers, interface,
-            )
+    if _core_sync_enabled('mail'):
+        mail_clause = _record_needs_peer_sync_clause('mail', 'm', 'unique_id')
+        c.execute(
+            f"SELECT sender, sender_short_name, recipient, recipient_short_name, subject, content, unique_id "
+            f"FROM mail m WHERE {mail_clause} ORDER BY m.id",
+            ('mail',),
+        )
+        for sender_id, sender_short_name, recipient_id, recipient_short_name, subject, content, unique_id in c.fetchall():
+            def _send_mail(pending_peers):
+                return send_mail_to_bbs_nodes(
+                    sender_id, sender_short_name, recipient_id, recipient_short_name,
+                    subject, content, unique_id, pending_peers, interface,
+                )
 
-        if _sync_record_to_peers('mail', unique_id, 'unique_id', unique_id, peers, _send_mail):
-            logging.info(f"Synced mail {unique_id} to all peers.")
-        else:
-            logging.warning(f"Mail {unique_id} sync incomplete; will retry pending peers.")
+            if _sync_record_to_peers(
+                'mail', unique_id, 'unique_id', unique_id, peers, _send_mail, interface,
+            ):
+                logging.info(f"Synced mail {unique_id} to all peers.")
+            else:
+                logging.warning(f"Mail {unique_id} sync incomplete; will retry pending peers.")
 
-    channel_clause = _record_needs_peer_sync_clause('channels', 'c', 'unique_id')
-    c.execute(
-        f"SELECT id, name, psk, unique_id FROM channels c "
-        f"WHERE publish = 'Y' AND deleted = 'N' AND {channel_clause} ORDER BY c.id",
-        ('channels',),
-    )
-    for channel_id, name, psk, unique_id in c.fetchall():
-        def _send_channel(pending_peers):
-            return send_channel_to_bbs_nodes(
-                name, psk, pending_peers, interface, unique_id=unique_id
-            )
+    if _core_sync_enabled('channels'):
+        channel_clause = _record_needs_peer_sync_clause('channels', 'c', 'unique_id')
+        c.execute(
+            f"SELECT id, name, psk, unique_id FROM channels c "
+            f"WHERE publish = 'Y' AND deleted = 'N' AND {channel_clause} ORDER BY c.id",
+            ('channels',),
+        )
+        for channel_id, name, psk, unique_id in c.fetchall():
+            def _send_channel(pending_peers):
+                return send_channel_to_bbs_nodes(
+                    name, psk, pending_peers, interface, unique_id=unique_id
+                )
 
-        if _sync_record_to_peers('channels', unique_id, 'unique_id', unique_id, peers, _send_channel):
-            logging.info(f"Synced channel {name} to all peers.")
-        else:
-            logging.warning(f"Channel {name} sync incomplete; will retry pending peers.")
+            if _sync_record_to_peers(
+                'channels', unique_id, 'unique_id', unique_id, peers, _send_channel, interface,
+            ):
+                logging.info(f"Synced channel {name} to all peers.")
+            else:
+                logging.warning(f"Channel {name} sync incomplete; will retry pending peers.")
 
-    sync_mesh_nodes_to_peers(peers, interface)
+    _sync_module_pending_records(peers, interface)
 
     from .node_resolution import scan_mesh_nodes_store
     scan_mesh_nodes_store(interface)
 
 
-def get_unsynced_records():
+def _sync_module_pending_records(peers, interface):
+    manager = getattr(interface, "module_manager", None)
+    if manager is None:
+        logging.debug("Module sync skipped; no module manager on interface.")
+        return
+    registrations = manager.get_sync_registrations()
+    if not registrations:
+        logging.debug("Module sync skipped; no module sync registrations.")
+        return
+    for registration in registrations:
+        if not manager.is_module_sync_enabled(registration.module_id):
+            logging.debug(
+                "Skipping module %s sync; module disabled.",
+                registration.module_id,
+            )
+            continue
+        if registration.sync_pending is None:
+            continue
+        logging.info(
+            "Running module sync for %s (%s).",
+            registration.record_type,
+            registration.module_id,
+        )
+        try:
+            registration.sync_pending(peers, interface)
+        except Exception as exc:
+            logging.error(
+                "Module %s sync_pending failed for %s: %s",
+                registration.module_id,
+                registration.record_type,
+                exc,
+                exc_info=True,
+            )
+
+
+def get_unsynced_records(interface=None):
     conn = get_db_connection()
     c = conn.cursor()
     peers = get_sync_peers()
-    bulletin_clause = _record_needs_peer_sync_clause('bulletins', 'b', 'unique_id')
-    mail_clause = _record_needs_peer_sync_clause('mail', 'm', 'unique_id')
-    channel_clause = _record_needs_peer_sync_clause('channels', 'c', 'unique_id')
-
-    c.execute(
-        f"SELECT id, board, sender_short_name, subject, deleted, unique_id FROM bulletins b "
-        f"WHERE deleted = 'N' AND {bulletin_clause} ORDER BY b.id",
-        ('bulletins',),
-    )
     bulletins = []
-    for row in c.fetchall():
-        pending = _get_pending_peer_labels('bulletins', row[5], peers)
-        bulletins.append((*row, pending))
+    if _core_sync_enabled('bulletins'):
+        bulletin_clause = _record_needs_peer_sync_clause('bulletins', 'b', 'unique_id')
+        c.execute(
+            f"SELECT id, board, sender_short_name, subject, deleted, unique_id FROM bulletins b "
+            f"WHERE deleted = 'N' AND {bulletin_clause} ORDER BY b.id",
+            ('bulletins',),
+        )
+        for row in c.fetchall():
+            pending = _get_pending_peer_labels('bulletins', row[5], peers)
+            bulletins.append((*row, pending))
 
-    c.execute(
-        f"SELECT id, sender_short_name, recipient, subject, unique_id FROM mail m "
-        f"WHERE {mail_clause} ORDER BY m.id",
-        ('mail',),
-    )
     mail_rows = []
-    for row in c.fetchall():
-        pending = _get_pending_peer_labels('mail', row[4], peers)
-        mail_rows.append((*row, pending))
+    if _core_sync_enabled('mail'):
+        mail_clause = _record_needs_peer_sync_clause('mail', 'm', 'unique_id')
+        c.execute(
+            f"SELECT id, sender_short_name, recipient, subject, unique_id FROM mail m "
+            f"WHERE {mail_clause} ORDER BY m.id",
+            ('mail',),
+        )
+        for row in c.fetchall():
+            pending = _get_pending_peer_labels('mail', row[4], peers)
+            mail_rows.append((*row, pending))
 
-    c.execute(
-        f"SELECT id, name, publish, unique_id FROM channels c "
-        f"WHERE publish = 'Y' AND deleted = 'N' AND {channel_clause} ORDER BY c.id",
-        ('channels',),
-    )
     channels = []
-    for row in c.fetchall():
-        pending = _get_pending_peer_labels('channels', row[3], peers)
-        channels.append((*row, pending))
+    if _core_sync_enabled('channels'):
+        channel_clause = _record_needs_peer_sync_clause('channels', 'c', 'unique_id')
+        c.execute(
+            f"SELECT id, name, publish, unique_id FROM channels c "
+            f"WHERE publish = 'Y' AND deleted = 'N' AND {channel_clause} ORDER BY c.id",
+            ('channels',),
+        )
+        for row in c.fetchall():
+            pending = _get_pending_peer_labels('channels', row[3], peers)
+            channels.append((*row, pending))
 
-    return bulletins, mail_rows, channels
+    from .module_sync import get_module_unsynced_records
+
+    modules = get_module_unsynced_records(interface)
+    return bulletins, mail_rows, channels, modules
 
 
 def get_system_status():
@@ -469,7 +619,14 @@ def get_system_status():
         'unread_mail': unread_mail,
         'sync_peers': get_sync_peers(),
         'rs_version_alert_count': count_rs_version_alerts(),
+        'module_sync_alert_peer_count': _count_module_sync_alert_peers(),
     }
+
+
+def _count_module_sync_alert_peers():
+    from .module_sync import count_module_sync_alert_peers
+
+    return count_module_sync_alert_peers()
 
 
 def get_db_connection():
@@ -492,7 +649,8 @@ def initialize_database(quiet=False):
                     unique_id TEXT NOT NULL,
                     delete_reconcile TEXT NOT NULL DEFAULT 'N',
                     synced TEXT NOT NULL DEFAULT 'N',
-                    pinned TEXT NOT NULL DEFAULT 'N'
+                    pinned TEXT NOT NULL DEFAULT 'N',
+                    from_sync TEXT NOT NULL DEFAULT 'N'
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS mail (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -515,7 +673,8 @@ def initialize_database(quiet=False):
                     synced TEXT NOT NULL DEFAULT 'N',
                     unique_id TEXT,
                     deleted TEXT NOT NULL DEFAULT 'N',
-                    delete_reconcile TEXT NOT NULL DEFAULT 'N'
+                    delete_reconcile TEXT NOT NULL DEFAULT 'N',
+                    from_sync TEXT NOT NULL DEFAULT 'N'
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS sysadmin_nodes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -553,7 +712,8 @@ def initialize_database(quiet=False):
                     ingest_channels TEXT NOT NULL DEFAULT 'Y',
                     rs_version_alert TEXT NOT NULL DEFAULT 'N',
                     rs_wire_version_seen INTEGER,
-                    enabled TEXT NOT NULL DEFAULT 'Y'
+                    enabled TEXT NOT NULL DEFAULT 'Y',
+                    allow_resync TEXT NOT NULL DEFAULT 'Y'
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS sys_config (
                     cfg_section TEXT NOT NULL,
@@ -567,7 +727,8 @@ def initialize_database(quiet=False):
                     module_dir TEXT NOT NULL UNIQUE,
                     menu_option TEXT NOT NULL UNIQUE COLLATE NOCASE,
                     enabled TEXT NOT NULL DEFAULT 'Y',
-                    schedule_enabled TEXT NOT NULL DEFAULT 'N'
+                    schedule_enabled TEXT NOT NULL DEFAULT 'N',
+                    main_menu_visible TEXT NOT NULL DEFAULT 'N'
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS record_sync_peers (
                     record_type TEXT NOT NULL,
@@ -576,6 +737,15 @@ def initialize_database(quiet=False):
                     synced TEXT NOT NULL DEFAULT 'N',
                     PRIMARY KEY (record_type, record_key, peer_id),
                     FOREIGN KEY (peer_id) REFERENCES sync_peers(id) ON DELETE CASCADE
+                )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS sync_peer_modules (
+                    peer_id INTEGER NOT NULL,
+                    module_id INTEGER NOT NULL,
+                    sync_out TEXT NOT NULL DEFAULT 'Y',
+                    ingest_in TEXT NOT NULL DEFAULT 'Y',
+                    PRIMARY KEY (peer_id, module_id),
+                    FOREIGN KEY (peer_id) REFERENCES sync_peers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (module_id) REFERENCES modules(id) ON DELETE CASCADE
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS mesh_nodes (
                     node_id TEXT PRIMARY KEY,
@@ -596,9 +766,20 @@ def initialize_database(quiet=False):
                     subject TEXT NOT NULL,
                     created TEXT NOT NULL
                 )''')
-    migrate_tc2_database(c)
+    c.execute('''CREATE TABLE IF NOT EXISTS pending_resync_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_bbs_node TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created TEXT NOT NULL
+                )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS peer_resync_outbound (
+                    requester_bbs_node TEXT NOT NULL PRIMARY KEY,
+                    stage TEXT NOT NULL,
+                    stage_cursor INTEGER NOT NULL DEFAULT 0,
+                    mesh_batch_index INTEGER NOT NULL DEFAULT 0,
+                    updated INTEGER NOT NULL
+                )''')
     _ensure_default_modules(c)
-    _ensure_database_indexes(c)
     conn.commit()
     if not quiet:
         print("Database schema initialized.")
@@ -646,6 +827,8 @@ def _ensure_database_indexes(c):
         "CREATE INDEX IF NOT EXISTS idx_sync_peers_protocol ON sync_peers(sync_protocol)",
         "CREATE INDEX IF NOT EXISTS idx_record_sync_peers_pending "
         "ON record_sync_peers(record_type, record_key, synced)",
+        "CREATE INDEX IF NOT EXISTS idx_sync_peer_modules_module "
+        "ON sync_peer_modules(module_id)",
         "CREATE INDEX IF NOT EXISTS idx_mesh_nodes_short_name ON mesh_nodes(short_name)",
         "CREATE INDEX IF NOT EXISTS idx_mesh_nodes_last_heard ON mesh_nodes(last_heard)",
     )
@@ -806,8 +989,13 @@ def _mark_mesh_node_synced_to_peer(node_id, peer_id):
 
 
 def sync_mesh_nodes_to_peers(sync_peers, interface):
-    from .utils import filter_peers_for_record_type, send_mesh_node_to_peer, sync_peer_protocol
-    from .sync_wire import is_rs_sync_protocol
+    from .utils import (
+        filter_peers_for_record_type,
+        send_mesh_nodes_batch_to_peer,
+        sync_peer_bbs_node,
+        sync_peer_protocol,
+    )
+    from .sync_wire import dedupe_mesh_node_entries, is_rs_sync_protocol, plan_nodes_sync_batches
 
     peers = get_sync_peers_from_interface(interface, sync_peers)
     mesh_peers = [
@@ -817,14 +1005,38 @@ def sync_mesh_nodes_to_peers(sync_peers, interface):
     if not mesh_peers:
         return
 
-    for node_id, short_name, long_name, last_heard in get_mesh_nodes_for_sync():
-        for peer in mesh_peers:
-            peer_id = _resolve_peer_id(peer)
-            if peer_id is None or _mesh_node_synced_to_peer(node_id, peer_id):
-                continue
-            if send_mesh_node_to_peer(
-                node_id, short_name, long_name, last_heard, peer, interface,
-            ):
+    all_nodes = get_mesh_nodes_for_sync()
+    if not all_nodes:
+        return
+
+    for peer in mesh_peers:
+        peer_id = _resolve_peer_id(peer)
+        if peer_id is None:
+            continue
+        pending = dedupe_mesh_node_entries([
+            (node_id, short_name, long_name, last_heard)
+            for node_id, short_name, long_name, last_heard in all_nodes
+            if not _mesh_node_synced_to_peer(node_id, peer_id)
+        ])
+        if not pending:
+            continue
+        peer_name = sync_peer_bbs_node(peer)
+        batches = plan_nodes_sync_batches(pending, sync_peer_protocol(peer))
+        logging.info(
+            "Mesh nodes sync to %s: %d pending nodes in %d batch(es).",
+            peer_name,
+            len(pending),
+            len(batches),
+        )
+        for batch in batches:
+            if not send_mesh_nodes_batch_to_peer(batch, peer, interface):
+                logging.warning(
+                    "Mesh nodes sync to %s stopped after failed batch (%d nodes).",
+                    peer_name,
+                    len(batch),
+                )
+                break
+            for node_id, *_rest in batch:
                 _mark_mesh_node_synced_to_peer(node_id, peer_id)
 
 
@@ -983,27 +1195,43 @@ def _apply_sync_mesh_nodes_for_protocol(sync_protocol, sync_mesh_nodes=None):
     return _normalize_sync_flag(sync_mesh_nodes)
 
 
+def _apply_allow_resync_for_protocol(sync_protocol, allow_resync='Y'):
+    if sync_protocol == 'tc2':
+        return 'N'
+    return _normalize_sync_flag(allow_resync)
+
+
 def _normalize_sync_protocol(protocol):
     protocol = (protocol or 'tc2').strip().lower()
     return protocol if protocol in SYNC_PROTOCOLS else None
 
 
 def ensure_sys_config_from_yaml(config_file=None):
+    """Seed required sys_config rows from example_config.yml defaults."""
     config_file = config_file or DEFAULT_CONFIG_FILE
-    config = load_config(config_file)
-    entries = flatten_yaml_config(config)
+    example_defaults = {
+        (cfg_section, cfg_key): cfg_value
+        for cfg_section, cfg_key, cfg_value in load_example_config_defaults()
+    }
+    user_values = {}
+    if Path(config_file).is_file():
+        user_values = {
+            (cfg_section, cfg_key): cfg_value
+            for cfg_section, cfg_key, cfg_value in flatten_yaml_config(load_config(config_file))
+        }
 
     conn = get_db_connection()
     c = conn.cursor()
-    for cfg_section, cfg_key, cfg_value in entries:
+    for (cfg_section, cfg_key), default_value in example_defaults.items():
         c.execute(
             "SELECT 1 FROM sys_config WHERE cfg_section = ? AND cfg_key = ?",
-            (cfg_section, cfg_key)
+            (cfg_section, cfg_key),
         )
         if c.fetchone() is None:
+            cfg_value = user_values.get((cfg_section, cfg_key), default_value)
             c.execute(
                 "INSERT INTO sys_config (cfg_section, cfg_key, cfg_value) VALUES (?, ?, ?)",
-                (cfg_section, cfg_key, cfg_value)
+                (cfg_section, cfg_key, cfg_value),
             )
     conn.commit()
 
@@ -1068,25 +1296,78 @@ def _bulletin_mesh_cutoff_date():
     return (datetime.now() - timedelta(days=age_days)).strftime('%Y-%m-%d %H:%M')
 
 
+DEFAULT_MODULES = (
+    ('Node Info', 'node_info', 'I', 'Y', 'Y'),
+    ('Example Hello', 'example_hello', 'E', 'N', 'N'),
+    ('Fortune', 'fortune', 'F', 'Y', 'N'),
+    ('BBS List', 'bbs_list', 'L', 'Y', 'N'),
+)
+
+
+def _ensure_default_module_row(c, module_name, module_dir, menu_option, enabled, schedule_enabled):
+    c.execute("SELECT 1 FROM modules WHERE module_dir = ?", (module_dir,))
+    if c.fetchone() is not None:
+        return
+    c.execute(
+        "INSERT INTO modules "
+        "(module_name, module_dir, menu_option, enabled, schedule_enabled) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (module_name, module_dir, menu_option, enabled, schedule_enabled),
+    )
+
+
+def _compact_module_ids(c):
+    """Renumber modules to 1..n and remap sync_peer_modules when gaps exist."""
+    rows = c.execute(
+        "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled, "
+        "main_menu_visible FROM modules ORDER BY id"
+    ).fetchall()
+    if not rows:
+        return
+
+    current_ids = [row[0] for row in rows]
+    expected_ids = list(range(1, len(rows) + 1))
+    if current_ids == expected_ids:
+        return
+
+    id_map = {old_id: new_id for new_id, old_id in enumerate(current_ids, start=1)}
+    peer_flags = c.execute(
+        "SELECT peer_id, module_id, sync_out, ingest_in FROM sync_peer_modules"
+    ).fetchall()
+
+    c.execute("DELETE FROM modules")
+    for new_id, row in enumerate(rows, start=1):
+        main_menu_visible = row[6] if len(row) > 6 else "N"
+        c.execute(
+            "INSERT INTO modules "
+            "(id, module_name, module_dir, menu_option, enabled, schedule_enabled, main_menu_visible) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (new_id, row[1], row[2], row[3], row[4], row[5], main_menu_visible),
+        )
+
+    for peer_id, module_id, sync_out, ingest_in in peer_flags:
+        new_module_id = id_map.get(module_id)
+        if new_module_id is None:
+            continue
+        c.execute(
+            "INSERT INTO sync_peer_modules (peer_id, module_id, sync_out, ingest_in) "
+            "VALUES (?, ?, ?, ?)",
+            (peer_id, new_module_id, sync_out, ingest_in),
+        )
+
+    count = len(rows)
+    if c.execute("SELECT 1 FROM sqlite_sequence WHERE name = 'modules'").fetchone():
+        c.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'modules'", (count,))
+    else:
+        c.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('modules', ?)", (count,))
+
+
 def _ensure_default_modules(c):
-    c.execute(
-        "INSERT OR IGNORE INTO modules "
-        "(module_name, module_dir, menu_option, enabled, schedule_enabled) "
-        "VALUES (?, ?, ?, ?, ?)",
-        ('Node Info', 'node_info', 'I', 'Y', 'Y'),
-    )
-    c.execute(
-        "INSERT OR IGNORE INTO modules "
-        "(module_name, module_dir, menu_option, enabled, schedule_enabled) "
-        "VALUES (?, ?, ?, ?, ?)",
-        ('Example Hello', 'example_hello', 'E', 'N', 'N'),
-    )
-    c.execute(
-        "INSERT OR IGNORE INTO modules "
-        "(module_name, module_dir, menu_option, enabled, schedule_enabled) "
-        "VALUES (?, ?, ?, ?, ?)",
-        ('Fortune', 'fortune', 'F', 'Y', 'N'),
-    )
+    for module_name, module_dir, menu_option, enabled, schedule_enabled in DEFAULT_MODULES:
+        _ensure_default_module_row(
+            c, module_name, module_dir, menu_option, enabled, schedule_enabled
+        )
+    _compact_module_ids(c)
 
 
 def format_module_menu_option(menu_option):
@@ -1096,13 +1377,27 @@ def format_module_menu_option(menu_option):
     return text
 
 
+def validate_module_menu_option(menu_option):
+    """Return (ok, normalized_option_or_error_message)."""
+    option = format_module_menu_option(menu_option)
+    if len(option) != 1 or not option.isalpha():
+        return False, "Menu option must be a single letter."
+    from .core_services import get_module_reserved_menu_options
+
+    if option.upper() in get_module_reserved_menu_options():
+        return False, f"Menu option {option} is reserved for core menus."
+    return True, option
+
+
 def _normalize_module_row(row):
     if row is None:
         return None
     menu_option = format_module_menu_option(row[3])
-    if menu_option == row[3]:
+    main_menu_visible = row[6] if len(row) > 6 else "N"
+    normalized = (row[0], row[1], row[2], menu_option, row[4], row[5], main_menu_visible)
+    if len(row) > 6 and menu_option == row[3]:
         return row
-    return (row[0], row[1], row[2], menu_option, row[4], row[5])
+    return normalized
 
 
 def get_modules(enabled_only=False):
@@ -1110,13 +1405,13 @@ def get_modules(enabled_only=False):
     c = conn.cursor()
     if enabled_only:
         c.execute(
-            "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled "
-            "FROM modules WHERE enabled = 'Y' ORDER BY id"
+            "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled, "
+            "main_menu_visible FROM modules WHERE enabled = 'Y' ORDER BY id"
         )
     else:
         c.execute(
-            "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled "
-            "FROM modules ORDER BY id"
+            "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled, "
+            "main_menu_visible FROM modules ORDER BY id"
         )
     return [_normalize_module_row(row) for row in c.fetchall()]
 
@@ -1129,8 +1424,8 @@ def get_module_by_id(module_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled "
-        "FROM modules WHERE id = ?",
+        "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled, "
+        "main_menu_visible FROM modules WHERE id = ?",
         (module_id,),
     )
     return _normalize_module_row(c.fetchone())
@@ -1143,14 +1438,19 @@ def get_module_by_menu_option(menu_option):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled "
-        "FROM modules WHERE menu_option = ? COLLATE NOCASE",
+        "SELECT id, module_name, module_dir, menu_option, enabled, schedule_enabled, "
+        "main_menu_visible FROM modules WHERE menu_option = ? COLLATE NOCASE",
         (menu_option,),
     )
     return _normalize_module_row(c.fetchone())
 
 
-def update_module_flags(module_id, enabled=None, schedule_enabled=None):
+def update_module_flags(
+    module_id,
+    enabled=None,
+    schedule_enabled=None,
+    main_menu_visible=None,
+):
     try:
         module_id = int(module_id)
     except (TypeError, ValueError):
@@ -1167,7 +1467,16 @@ def update_module_flags(module_id, enabled=None, schedule_enabled=None):
             "UPDATE modules SET schedule_enabled = ? WHERE id = ?",
             (_normalize_sync_flag(schedule_enabled), module_id),
         )
+    if main_menu_visible is not None:
+        c.execute(
+            "UPDATE modules SET main_menu_visible = ? WHERE id = ?",
+            (_normalize_sync_flag(main_menu_visible), module_id),
+        )
     conn.commit()
+    if any(value is not None for value in (enabled, schedule_enabled, main_menu_visible)):
+        from .mesh_ui import request_main_menu_regeneration
+
+        request_main_menu_regeneration()
     return True
 
 
@@ -1218,6 +1527,8 @@ def update_sys_config_entry(cfg_section, cfg_key, cfg_value):
     cfg_key = (cfg_key or '').strip()
     if not cfg_section or not cfg_key:
         return False
+    if is_sys_config_key_protected(cfg_section, cfg_key):
+        return False
 
     conn = get_db_connection()
     c = conn.cursor()
@@ -1233,6 +1544,8 @@ def delete_sys_config_entry(cfg_section, cfg_key):
     cfg_section = (cfg_section or '').strip()
     cfg_key = (cfg_key or '').strip()
     if not cfg_section or not cfg_key:
+        return False
+    if is_sys_config_key_protected(cfg_section, cfg_key):
         return False
 
     conn = get_db_connection()
@@ -1406,6 +1719,7 @@ def add_sync_peer(
     ingest_bulletins='Y',
     ingest_channels='Y',
     enabled='Y',
+    allow_resync='Y',
 ):
     bbs_node = (bbs_node or '').strip()
     bbs_name = (bbs_name or '').strip() or None
@@ -1417,6 +1731,7 @@ def add_sync_peer(
     ingest_bulletins = _normalize_sync_flag(ingest_bulletins)
     ingest_channels = _normalize_sync_flag(ingest_channels)
     enabled = _normalize_sync_flag(enabled)
+    allow_resync = _apply_allow_resync_for_protocol(sync_protocol, allow_resync)
     if not bbs_node or not sync_protocol:
         return False
 
@@ -1426,12 +1741,12 @@ def add_sync_peer(
         c.execute(
             "INSERT INTO sync_peers "
             "(bbs_node, bbs_name, sync_protocol, last_heard, sync_bulletins, sync_mail, sync_channels, "
-            "sync_mesh_nodes, ingest_bulletins, ingest_channels, enabled) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "sync_mesh_nodes, ingest_bulletins, ingest_channels, enabled, allow_resync) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 bbs_node, bbs_name, sync_protocol, int(time.time()),
                 sync_bulletins, sync_mail, sync_channels, sync_mesh_nodes,
-                ingest_bulletins, ingest_channels, enabled,
+                ingest_bulletins, ingest_channels, enabled, allow_resync,
             ),
         )
         conn.commit()
@@ -1482,6 +1797,7 @@ def update_sync_peer(
     ingest_bulletins='Y',
     ingest_channels='Y',
     enabled='Y',
+    allow_resync='Y',
 ):
     bbs_node = (bbs_node or '').strip()
     bbs_name = (bbs_name or '').strip() or None
@@ -1493,6 +1809,7 @@ def update_sync_peer(
     ingest_bulletins = _normalize_sync_flag(ingest_bulletins)
     ingest_channels = _normalize_sync_flag(ingest_channels)
     enabled = _normalize_sync_flag(enabled)
+    allow_resync = _apply_allow_resync_for_protocol(sync_protocol, allow_resync)
     if not peer_id or not bbs_node or not sync_protocol:
         return False
 
@@ -1502,16 +1819,18 @@ def update_sync_peer(
         c.execute(
             "UPDATE sync_peers SET bbs_node = ?, bbs_name = ?, sync_protocol = ?, last_heard = ?, "
             "sync_bulletins = ?, sync_mail = ?, sync_channels = ?, sync_mesh_nodes = ?, "
-            "ingest_bulletins = ?, ingest_channels = ?, enabled = ?, rs_version_alert = 'N', "
-            "rs_wire_version_seen = NULL WHERE id = ?",
+            "ingest_bulletins = ?, ingest_channels = ?, enabled = ?, allow_resync = ?, "
+            "rs_version_alert = 'N', rs_wire_version_seen = NULL WHERE id = ?",
             (
                 bbs_node, bbs_name, sync_protocol, int(time.time()),
                 sync_bulletins, sync_mail, sync_channels, sync_mesh_nodes,
-                ingest_bulletins, ingest_channels, enabled, peer_id,
+                ingest_bulletins, ingest_channels, enabled, allow_resync, peer_id,
             ),
         )
         conn.commit()
         if c.rowcount > 0:
+            if sync_protocol == 'tc2':
+                clear_sync_peer_module_flags(peer_id)
             if enabled == 'N':
                 _clear_peer_record_sync(peer_id)
             else:
@@ -1578,10 +1897,12 @@ def add_channel(
             return existing[0]
 
     synced = 'Y' if from_sync else 'N'
+    origin_sync = 'Y' if from_sync else 'N'
     try:
         c.execute(
-            "INSERT INTO channels (name, psk, publish, synced, unique_id) VALUES (?, ?, ?, ?, ?)",
-            (name, psk, publish, synced, unique_id),
+            "INSERT INTO channels (name, psk, publish, synced, unique_id, from_sync) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (name, psk, publish, synced, unique_id, origin_sync),
         )
     except sqlite3.IntegrityError:
         c.execute(
@@ -1607,7 +1928,7 @@ def add_channel(
 
 
 def sync_channel_record(unique_id, bbs_nodes, interface):
-    if interface is None:
+    if interface is None or not _core_sync_enabled('channels'):
         return
 
     conn = get_db_connection()
@@ -2144,6 +2465,9 @@ def _queue_pending_sync_delete(record_type, record_key):
 
 
 def sync_pending_deletes(sync_peers, interface):
+    if not _core_sync_enabled('mail'):
+        return
+
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
@@ -2195,7 +2519,8 @@ def delete_mail_by_admin(mail_id):
             ('mail', unique_id),
         )
         conn.commit()
-        _queue_pending_sync_delete('mail', unique_id)
+        if _core_sync_enabled('mail'):
+            _queue_pending_sync_delete('mail', unique_id)
         return True
     return False
 
@@ -2234,7 +2559,7 @@ def _mark_channel_for_reconcile(channel_id):
     c = conn.cursor()
     c.execute(
         "UPDATE channels SET deleted = 'Y', delete_reconcile = 'Y' "
-        "WHERE id = ? AND deleted = 'N'",
+        "WHERE id = ? AND delete_reconcile != 'Y'",
         (channel_id,),
     )
     conn.commit()
@@ -2249,14 +2574,25 @@ def mark_channel_for_reconcile_by_sync(unique_id, sender_node_id=None):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id FROM channels WHERE unique_id = ? AND deleted = 'N'",
+        "SELECT id, from_sync, delete_reconcile FROM channels WHERE unique_id = ?",
         (unique_id,),
     )
     row = c.fetchone()
     if row is None:
         return False
 
-    channel_id = row[0]
+    channel_id, from_sync, delete_reconcile = row[0], row[1], row[2]
+    if from_sync != 'Y':
+        logging.info(
+            "Ignoring DELETE_CHANNEL from peer %s for locally originated channel "
+            "(unique_id: %s).",
+            sender_node_id,
+            unique_id,
+        )
+        return False
+    if delete_reconcile == 'Y':
+        return False
+
     marked = _mark_channel_for_reconcile(channel_id)
     if marked:
         logging.info(
@@ -2280,7 +2616,7 @@ def restore_reconcile_channel(channel_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "UPDATE channels SET deleted = 'N', delete_reconcile = 'N' "
+        "UPDATE channels SET deleted = 'N', delete_reconcile = 'N', from_sync = 'N' "
         "WHERE id = ? AND delete_reconcile = 'Y'",
         (channel_id,),
     )
@@ -2326,6 +2662,9 @@ def mark_channel_deleted(channel_id):
 
 
 def purge_deleted_channels(bbs_nodes, interface):
+    if not _core_sync_enabled('channels'):
+        return
+
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
@@ -2446,8 +2785,8 @@ def ingest_bulletin_from_rsv1_sync(
         date = datetime.now().strftime("%Y-%m-%d %H:%M")
         c.execute(
             "INSERT INTO bulletins "
-            "(board, sender_short_name, date, subject, content, unique_id, synced, pinned) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'Y', ?)",
+            "(board, sender_short_name, date, subject, content, unique_id, synced, pinned, from_sync) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'Y', ?, 'Y')",
             (board, sender_short_name, date, subject, content, unique_id, pinned),
         )
         conn.commit()
@@ -2490,10 +2829,13 @@ def add_bulletin(board, sender_short_name, subject, content, bbs_nodes, interfac
         return unique_id
 
     synced = 'Y' if from_sync else 'N'
+    origin_sync = 'Y' if from_sync else 'N'
     c.execute(
-        "INSERT INTO bulletins (board, sender_short_name, date, subject, content, unique_id, synced) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (board, sender_short_name, date, subject, content, unique_id, synced))
+        "INSERT INTO bulletins "
+        "(board, sender_short_name, date, subject, content, unique_id, synced, from_sync) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (board, sender_short_name, date, subject, content, unique_id, synced, origin_sync),
+    )
     conn.commit()
 
     if from_sync:
@@ -2511,7 +2853,7 @@ def add_bulletin(board, sender_short_name, subject, content, bbs_nodes, interfac
 
 
 def sync_bulletin_record(unique_id, bbs_nodes, interface):
-    if interface is None:
+    if interface is None or not _core_sync_enabled('bulletins'):
         return
 
     conn = get_db_connection()
@@ -2688,11 +3030,46 @@ def _mark_bulletin_for_reconcile(bulletin_id):
     c = conn.cursor()
     c.execute(
         "UPDATE bulletins SET deleted = 'Y', delete_reconcile = 'Y' "
-        "WHERE id = ? AND deleted = 'N'",
-        (bulletin_id,)
+        "WHERE id = ? AND delete_reconcile != 'Y'",
+        (bulletin_id,),
     )
     conn.commit()
     return c.rowcount > 0
+
+
+def _apply_peer_bulletin_delete(bulletin_id, sender_node_id=None, identifier=None):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT from_sync, delete_reconcile FROM bulletins WHERE id = ?",
+        (bulletin_id,),
+    )
+    row = c.fetchone()
+    if row is None:
+        return False
+    from_sync, delete_reconcile = row[0], row[1]
+    if from_sync != 'Y':
+        logging.info(
+            "Ignoring peer bulletin delete from %s for locally originated bulletin %s "
+            "(identifier: %s).",
+            sender_node_id,
+            bulletin_id,
+            identifier,
+        )
+        return False
+    if delete_reconcile == 'Y':
+        return False
+
+    marked = _mark_bulletin_for_reconcile(bulletin_id)
+    if marked:
+        logging.info(
+            "Marked bulletin %s for reconcile after delete sync from peer %s "
+            "(identifier: %s).",
+            bulletin_id,
+            sender_node_id,
+            identifier,
+        )
+    return marked
 
 
 def get_reconcile_bulletins():
@@ -2709,9 +3086,9 @@ def restore_reconcile_bulletin(bulletin_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "UPDATE bulletins SET deleted = 'N', delete_reconcile = 'N' "
+        "UPDATE bulletins SET deleted = 'N', delete_reconcile = 'N', from_sync = 'N' "
         "WHERE id = ? AND delete_reconcile = 'Y'",
-        (bulletin_id,)
+        (bulletin_id,),
     )
     conn.commit()
     return c.rowcount > 0
@@ -2772,6 +3149,8 @@ def delete_bulletin(bulletin_id, bbs_nodes, interface):
     from .urgent_alerts import clear_pending_urgent_alert
 
     clear_pending_urgent_alert(unique_id)
+    if not _core_sync_enabled('bulletins'):
+        return
     sync_peers = get_sync_peers_from_interface(interface, bbs_nodes)
     bulletin_peers = filter_peers_for_record_type(sync_peers, 'bulletins')
     if bulletin_peers and interface:
@@ -2783,16 +3162,8 @@ def delete_bulletin_by_sync_identifier(identifier, sender_node_id=None):
     if not identifier:
         return False
 
-    protocol = get_sync_protocol_for_peer(sender_node_id) or 'tc2'
     conn = get_db_connection()
     c = conn.cursor()
-
-    from .sync_wire import is_rs_sync_protocol
-
-    if is_rs_sync_protocol(protocol) and _is_uuid(identifier):
-        c.execute("DELETE FROM bulletins WHERE unique_id = ?", (identifier,))
-        conn.commit()
-        return c.rowcount > 0
 
     bulletin_id = None
     if _is_uuid(identifier):
@@ -2810,13 +3181,7 @@ def delete_bulletin_by_sync_identifier(identifier, sender_node_id=None):
         if c.fetchone() is None:
             return False
 
-    marked = _mark_bulletin_for_reconcile(bulletin_id)
-    if marked:
-        logging.info(
-            f"Marked bulletin {bulletin_id} for reconcile after tc2 delete sync "
-            f"from peer {sender_node_id} (identifier: {identifier})."
-        )
-    return marked
+    return _apply_peer_bulletin_delete(bulletin_id, sender_node_id, identifier)
 
 
 def _is_uuid(value):
@@ -2832,6 +3197,9 @@ def is_sync_uuid(value):
 
 
 def purge_deleted_bulletins(bbs_nodes, interface):
+    if not _core_sync_enabled('bulletins'):
+        return
+
     conn = get_db_connection()
     c = conn.cursor()
     c.execute("SELECT id, unique_id FROM bulletins WHERE deleted = 'Y' AND delete_reconcile = 'N'")
@@ -2846,6 +3214,18 @@ def purge_deleted_bulletins(bbs_nodes, interface):
             if bulletin_peers:
                 send_delete_bulletin_to_sync_peers(bulletin_id, unique_id, bulletin_peers, interface)
             logging.info(f"Purged bulletin {bulletin_id} and sent delete sync to peer BBS nodes.")
+
+def _notify_new_mail_recipient(sender_short_name, recipient_id, interface):
+    from .node_resolution import is_hex_node_id
+
+    if interface is None or not is_hex_node_id(recipient_id):
+        return
+    send_message(
+        f"New mail from {sender_short_name}. Send RM to read new mail.",
+        recipient_id,
+        interface,
+    )
+
 
 def add_mail(
     sender_id,
@@ -2912,11 +3292,25 @@ def add_mail(
 
     if not defer_sync:
         sync_mail_record(unique_id, bbs_nodes, interface)
+
+    try:
+        _notify_new_mail_recipient(
+            sender_short_name,
+            recipient_hex or recipient_id,
+            interface,
+        )
+    except Exception as exc:
+        logging.error(
+            "Failed to notify mail recipient %s: %s",
+            recipient_hex or recipient_id,
+            exc,
+            exc_info=True,
+        )
     return unique_id, recipient_hex or recipient_short_name
 
 
 def sync_mail_record(unique_id, bbs_nodes, interface):
-    if interface is None:
+    if interface is None or not _core_sync_enabled('mail'):
         return
 
     conn = get_db_connection()
@@ -3015,11 +3409,14 @@ def delete_mail(unique_id, recipient_id, bbs_nodes, interface):
         )
         conn.commit()
         logging.info(f"Attempting to delete mail with unique_id: {unique_id} by {recipient_id}")
-        sync_peers = get_sync_peers_from_interface(interface, bbs_nodes)
-        mail_peers = filter_peers_for_record_type(sync_peers, 'mail')
-        if mail_peers:
-            send_delete_mail_to_bbs_nodes(unique_id, mail_peers, interface)
-        logging.info(f"Mail with unique_id: {unique_id} deleted and sync message sent.")
+        if _core_sync_enabled('mail'):
+            sync_peers = get_sync_peers_from_interface(interface, bbs_nodes)
+            mail_peers = filter_peers_for_record_type(sync_peers, 'mail')
+            if mail_peers:
+                send_delete_mail_to_bbs_nodes(unique_id, mail_peers, interface)
+            logging.info(f"Mail with unique_id: {unique_id} deleted and sync message sent.")
+        else:
+            logging.info(f"Mail with unique_id: {unique_id} deleted locally; mail sync disabled.")
     except Exception as e:
         logging.error(f"Error deleting mail with unique_id {unique_id}: {e}")
         raise

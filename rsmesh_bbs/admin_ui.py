@@ -17,6 +17,8 @@ MENU_SEPARATOR_LINE = 22
 MENU_INPUT_LINE = 23
 PAGE_HEADER_LINE_COUNT = 3
 MENU_OPTION_INDENT = 5
+# Confirmation/action messages: 5-column indent + 70 text + 5-column right margin.
+MESSAGE_WRAP_TEXT_WIDTH = 70
 CONTENT_LINES_PER_PAGE = CONTENT_END_LINE - CONTENT_START_LINE + 1
 
 console = Console(width=DISPLAY_COLUMNS, force_terminal=True)
@@ -78,6 +80,98 @@ def begin_data_display(page_title):
     print_page_header(page_title)
 
 
+def begin_form_screen(page_title):
+    clear_screen()
+    begin_data_display(page_title)
+
+
+def wrap_message_text(text, max_width):
+    """Wrap a single line of plain text to fit within max_width (word-aware).
+
+    Words are never broken across lines; a word longer than max_width occupies
+    its own line whole.
+    """
+    if max_width <= 0:
+        return [text or ""]
+    text = text or ""
+    if len(text) <= max_width:
+        return [text]
+
+    lines = []
+    words = text.split()
+    current = []
+    current_len = 0
+
+    def flush():
+        nonlocal current, current_len
+        if current:
+            lines.append(" ".join(current))
+            current = []
+            current_len = 0
+
+    for word in words:
+        if not current:
+            if len(word) <= max_width:
+                current = [word]
+                current_len = len(word)
+            else:
+                lines.append(word)
+            continue
+        candidate = current_len + 1 + len(word)
+        if len(word) <= max_width and candidate <= max_width:
+            current.append(word)
+            current_len = candidate
+        elif len(word) <= max_width:
+            flush()
+            current = [word]
+            current_len = len(word)
+        else:
+            flush()
+            lines.append(word)
+    flush()
+    return lines or [""]
+
+
+def message_lines_for_display(
+    message,
+    indent=MENU_OPTION_INDENT,
+    text_width=MESSAGE_WRAP_TEXT_WIDTH,
+):
+    """Return display lines for a message, wrapped to the admin message width."""
+    prefix = " " * indent
+    max_text_width = max(1, text_width)
+    display_lines = []
+    raw_lines = (message or "").splitlines()
+    if not raw_lines:
+        raw_lines = [""]
+    for raw in raw_lines:
+        if raw == "":
+            display_lines.append(None)
+            continue
+        for wrapped in wrap_message_text(raw, max_text_width):
+            display_lines.append(prefix + wrapped)
+    return display_lines
+
+
+def render_message_body(message):
+    """Print a message using the standard admin indent and line wrapping."""
+    for line in message_lines_for_display(message):
+        if line is None:
+            console.print()
+        else:
+            print_bold(line)
+
+
+def finish_action_message(message, page_title):
+    clear_screen()
+    begin_data_display(page_title)
+    display_lines = message_lines_for_display(message)
+    render_message_body(message)
+    lines_used = PAGE_HEADER_LINE_COUNT + len(display_lines)
+    _pad_to_line(MENU_SEPARATOR_LINE, lines_used)
+    print_separator()
+
+
 def _chunk_lines(lines, page_size):
     if not lines:
         return []
@@ -93,7 +187,7 @@ def _render_display_lines(lines):
 
 
 def _print_no_data(message):
-    print_bold(" " * MENU_OPTION_INDENT + message)
+    render_message_body(message)
 
 
 def _pad_to_line(target_line, lines_used):
@@ -102,7 +196,15 @@ def _pad_to_line(target_line, lines_used):
         console.print("\n" * padding, end="")
 
 
-def paginate_display(page_title, lines, *, empty_message="No data found.", select_prompt=None, select_empty_exits=False):
+def paginate_display(
+    page_title,
+    lines,
+    *,
+    empty_message="No data found.",
+    select_prompt=None,
+    select_empty_exits=False,
+    hotkeys=None,
+):
     back_footer = "Enter or X=back:"
     if not lines:
         clear_screen()
@@ -150,18 +252,23 @@ def paginate_display(page_title, lines, *, empty_message="No data found.", selec
             prompt = f"{page_info}  N=next  P=prev  {back_footer}"
 
         choice = input_bold(prompt).strip()
+        choice_key = choice.upper()
 
-        if choice.upper() == 'N':
+        if hotkeys and choice_key in hotkeys:
+            hotkeys[choice_key]()
+            continue
+
+        if choice_key == 'N':
             if page_index < len(pages) - 1:
                 page_index += 1
             continue
-        if choice.upper() == 'P':
+        if choice_key == 'P':
             if page_index > 0:
                 page_index -= 1
             continue
 
         if select_prompt:
-            if choice.upper() == 'X' or (select_empty_exits and not choice):
+            if choice_key == 'X' or (select_empty_exits and not choice):
                 clear_screen()
                 return len(page_lines), 'X'
             if choice:
@@ -169,7 +276,7 @@ def paginate_display(page_title, lines, *, empty_message="No data found.", selec
                 return len(page_lines), choice
             continue
 
-        if choice.upper() == 'X' or not choice:
+        if choice_key == 'X' or not choice:
             clear_screen()
             return False
         continue

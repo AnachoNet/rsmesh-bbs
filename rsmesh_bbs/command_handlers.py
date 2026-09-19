@@ -11,16 +11,9 @@ from .db_operations import (
 from .utils import (
     get_node_id_from_num, get_node_info,
     get_node_short_name, send_message, send_user_message, send_user_messages,
-    update_user_state, bundle_bulletin_read_list,
+    update_user_state, bundle_bulletin_read_list, bundle_mail_inbox_list,
 )
-from .node_resolution import is_hex_node_id
-
-# Main menu layout:
-# [B]ulletins [C]hannels
-# [R]ead Mail [S]end Mail
-# [M]odules  E[X]IT
-MAIN_MENU_ITEMS = ('B', 'C', 'R', 'S', 'M', 'X')
-
+from .mesh_ui import MAIL_SUBMENU_TEXT, load_main_menu_body
 EXIT_PROMPT = "E[X]IT"
 
 
@@ -31,31 +24,79 @@ def _parse_int(message):
         return None
 
 
-def _show_mail_inbox(sender_id, interface, prefix_messages=None):
+def _count_unread_mail(mail_rows):
+    return sum(1 for row in mail_rows if (row[5] or "N").upper() == "N")
+
+
+def _mail_inbox_summary_text(mail_rows):
+    total = len(mail_rows)
+    unread = _count_unread_mail(mail_rows)
+    summary = f"{total} message(s)"
+    if unread:
+        summary += f" - {unread} new message(s)"
+    return with_exit_prompt(f"{summary}\n[N]ew [A]ll")
+
+
+def _show_mail_inbox_summary(
+    sender_id,
+    interface,
+    prefix_messages=None,
+    return_to_mail_menu=False,
+):
     sender_node_id = get_node_id_from_num(sender_id, interface)
     mail = get_mail(sender_node_id, interface)
     if mail:
-        messages = list(prefix_messages or []) + [
-            with_exit_prompt(f"{len(mail)} message(s). Select message number to read:"),
-        ]
-        for msg in mail:
-            mail_id, sender_short_name, subject, date, _unique_id, read_flag = msg
-            header = f"-{mail_id}-"
-            if (read_flag or "N").upper() == "N":
-                header += " *NEW*"
-            messages.append(
-                f"{header}\nDate: {date}\nFrom: {sender_short_name}\nSubject: {subject}"
-            )
+        messages = list(prefix_messages or []) + [_mail_inbox_summary_text(mail)]
         send_user_messages(messages, sender_id, interface)
-        update_user_state(sender_id, {'command': 'MAIL', 'step': 2})
+        update_user_state(sender_id, {"command": "MAIL", "step": 2})
     else:
-        messages = list(prefix_messages or [])
-        if messages:
-            messages.append("No messages.")
-            send_user_messages(messages, sender_id, interface)
+        empty_notice = list(prefix_messages or [])
+        empty_notice.append("No messages.")
+        if return_to_mail_menu:
+            handle_mail_menu_command(sender_id, interface, prefix_messages=empty_notice)
+        elif prefix_messages:
+            send_user_messages(empty_notice, sender_id, interface)
+            update_user_state(sender_id, None)
         else:
             send_user_message("No messages.", sender_id, interface)
-        update_user_state(sender_id, None)
+            update_user_state(sender_id, None)
+
+
+def _filter_mail_rows(mail_rows, mail_filter):
+    if mail_filter == "new":
+        return [row for row in mail_rows if (row[5] or "N").upper() == "N"]
+    return mail_rows
+
+
+def _show_mail_inbox_list(
+    sender_id,
+    interface,
+    mail_rows,
+    prefix_messages=None,
+    mail_filter="all",
+):
+    footer = with_exit_prompt("Select message number to read:")
+    bundles = bundle_mail_inbox_list(mail_rows, footer=footer)
+    messages = list(prefix_messages or []) + bundles
+    send_user_messages(messages, sender_id, interface)
+    update_user_state(
+        sender_id,
+        {"command": "MAIL", "step": 21, "mail_inbox_filter": mail_filter},
+    )
+
+
+def _show_mail_inbox(
+    sender_id,
+    interface,
+    prefix_messages=None,
+    return_to_mail_menu=False,
+):
+    _show_mail_inbox_summary(
+        sender_id,
+        interface,
+        prefix_messages=prefix_messages,
+        return_to_mail_menu=return_to_mail_menu,
+    )
 
 
 def _send_bulletin_delete_prompt(sender_id, interface, board_name, prefix_messages=None):
@@ -107,45 +148,12 @@ def with_exit_prompt(menu_text, include_exit=True):
     return menu_text + EXIT_PROMPT
 
 
-MENU_LABELS = {
-    'B': '[B]ulletins',
-    'R': '[R]ead Mail',
-    'S': '[S]end Mail',
-    'C': '[C]hannels',
-    'M': '[M]odules',
-    'X': 'E[X]IT',
-}
-
-MENU_ROWS = [
-    ('B', 'C'),
-    ('R', 'S'),
-    ('M', 'X'),
-]
-
-MENU_LEFT_WIDTH = max(len(MENU_LABELS[left]) for left, _ in MENU_ROWS)
-
-
-def build_menu(menu_name):
-    menu_str = f"{menu_name}\n"
-    enabled = set(MAIN_MENU_ITEMS)
-
-    for left_key, right_key in MENU_ROWS:
-        left_label = MENU_LABELS[left_key] if left_key in enabled else None
-        right_label = MENU_LABELS[right_key] if right_key in enabled else None
-
-        if left_label and right_label:
-            menu_str += f"{left_label:<{MENU_LEFT_WIDTH}} {right_label}\n"
-        elif left_label:
-            menu_str += f"{left_label}\n"
-        elif right_label:
-            menu_str += f"{right_label}\n"
-
-    return menu_str
-
 def handle_help_command(sender_id, interface, prefix_messages=None):
     update_user_state(sender_id, {'command': 'MAIN_MENU', 'step': 1})
     mail = get_mail(get_node_id_from_num(sender_id, interface), interface)
-    response = build_menu(f"= {get_board_name()} : {len(mail)} Msg(s) =")
+    board_name = get_board_name()
+    title = f"= {board_name} : {len(mail)} Msg(s) ="
+    response = f"{title}\n{load_main_menu_body(board_name=board_name)}"
     messages = list(prefix_messages or []) + [response]
     send_user_messages(messages, sender_id, interface)
 
@@ -213,13 +221,84 @@ def handle_bulletin_delete_steps(sender_id, message, step, state, interface, bbs
         handle_help_command(sender_id, interface, prefix_messages=["Bulletin deleted."])
 
 
+def _mail_returns_to_submenu():
+    from .core_services import is_mail_commands_on_main_menu
+
+    return not is_mail_commands_on_main_menu()
+
+
 def handle_read_mail_command(sender_id, interface):
-    _show_mail_inbox(sender_id, interface)
+    _show_mail_inbox(sender_id, interface, return_to_mail_menu=_mail_returns_to_submenu())
+
+
+def handle_read_new_mail_quick_command(sender_id, interface):
+    """Quick command RM: jump to the new-mail list (Mail → Read → New)."""
+    sender_node_id = get_node_id_from_num(sender_id, interface)
+    mail = get_mail(sender_node_id, interface)
+    return_to_mail_menu = _mail_returns_to_submenu()
+    if not mail:
+        _show_mail_inbox(
+            sender_id,
+            interface,
+            return_to_mail_menu=return_to_mail_menu,
+        )
+        return
+    filtered = _filter_mail_rows(mail, "new")
+    if not filtered:
+        _show_mail_inbox_summary(
+            sender_id,
+            interface,
+            prefix_messages=["No new messages."],
+            return_to_mail_menu=return_to_mail_menu,
+        )
+        return
+    _show_mail_inbox_list(sender_id, interface, filtered, mail_filter="new")
+
+
+def dispatch_mesh_quick_command(sender_id, interface, command):
+    """Handle TC²-style mail quick commands from the main menu."""
+    from .core_services import is_core_mail_enabled
+
+    if not is_core_mail_enabled():
+        return False
+    text = (command or "").strip().lower()
+    if text == "rm":
+        handle_read_new_mail_quick_command(sender_id, interface)
+        return True
+    if text == "sm":
+        handle_send_mail_command(sender_id, interface)
+        return True
+    return False
 
 
 def handle_send_mail_command(sender_id, interface):
     send_user_message("Short Name of the node to message?", sender_id, interface)
     update_user_state(sender_id, {'command': 'MAIL', 'step': 3})
+
+
+def handle_mail_menu_command(sender_id, interface, prefix_messages=None):
+    response = with_exit_prompt(MAIL_SUBMENU_TEXT)
+    messages = list(prefix_messages or []) + [response]
+    send_user_messages(messages, sender_id, interface)
+    update_user_state(sender_id, {'command': 'MAIL_MENU', 'step': 1})
+
+
+def handle_mail_menu_steps(sender_id, message, step, interface):
+    message = message.lower().strip()
+    if len(message) == 2 and message[1] == 'x':
+        message = message[0]
+    if message == 'x':
+        handle_help_command(sender_id, interface)
+        return
+    if step != 1:
+        handle_help_command(sender_id, interface)
+        return
+    if message == 'r':
+        handle_read_mail_command(sender_id, interface)
+    elif message == 's':
+        handle_send_mail_command(sender_id, interface)
+    else:
+        handle_mail_menu_command(sender_id, interface, prefix_messages=["Invalid option."])
 
 
 def handle_bulletin_command(sender_id, interface):
@@ -234,8 +313,10 @@ def handle_exit_command(sender_id, interface):
 
 
 def handle_modules_command(sender_id, interface):
+    from .mesh_ui import should_show_modules_entry
+
     manager = getattr(interface, 'module_manager', None)
-    if manager is None:
+    if manager is None or not should_show_modules_entry():
         send_message("Modules are not available.", sender_id, interface)
         handle_help_command(sender_id, interface)
         return
@@ -379,29 +460,90 @@ def handle_mail_steps(sender_id, message, step, state, interface, bbs_nodes):
         message = message[0]
 
     if step == 2:
+        sender_node_id = get_node_id_from_num(sender_id, interface)
+        mail = get_mail(sender_node_id, interface)
+        choice = message.lower()
+        if choice == "n":
+            filtered = [row for row in mail if (row[5] or "N").upper() == "N"]
+            if not filtered:
+                _show_mail_inbox_summary(
+                    sender_id,
+                    interface,
+                    prefix_messages=["No new messages."],
+                )
+                return
+            _show_mail_inbox_list(sender_id, interface, filtered, mail_filter="new")
+            return
+        if choice == "a":
+            _show_mail_inbox_list(sender_id, interface, mail, mail_filter="all")
+            return
+        if message.lower() == "x":
+            if _mail_returns_to_submenu():
+                handle_mail_menu_command(sender_id, interface)
+            else:
+                handle_help_command(sender_id, interface)
+            return
+        _show_mail_inbox_summary(
+            sender_id,
+            interface,
+            prefix_messages=["Choose N, A, or X."],
+        )
+        return
+
+    elif step == 21:
+        if message.lower() == "x":
+            _show_mail_inbox(sender_id, interface)
+            return
         mail_id = _parse_int(message)
+        sender_node_id = get_node_id_from_num(sender_id, interface)
+        mail = get_mail(sender_node_id, interface)
+        mail_filter = state.get("mail_inbox_filter") or "all"
+        visible_mail = _filter_mail_rows(mail, mail_filter)
         if mail_id is None:
-            _show_mail_inbox(
-                sender_id, interface,
+            _show_mail_inbox_list(
+                sender_id,
+                interface,
+                visible_mail,
                 prefix_messages=["Invalid message number."],
+                mail_filter=mail_filter,
             )
             return
         try:
             sender_node_id = get_node_id_from_num(sender_id, interface)
-            sender, date, subject, content, unique_id = get_mail_content(mail_id, sender_node_id, interface)
+            sender, date, subject, content, unique_id = get_mail_content(
+                mail_id, sender_node_id, interface
+            )
             if unique_id is None:
                 raise TypeError("mail not found")
             mail_text = f"Date: {date}\nFrom: {sender}\nSubject: {subject}\n{content}"
-            send_user_messages([
-                mail_text,
-                with_exit_prompt("Message command:\n[K]eep  [D]elete  [R]eply"),
-            ], sender_id, interface)
-            update_user_state(sender_id, {'command': 'MAIL', 'step': 4, 'mail_id': mail_id, 'unique_id': unique_id, 'sender': sender, 'subject': subject, 'content': content})
+            send_user_messages(
+                [
+                    mail_text,
+                    with_exit_prompt("Message command:\n[K]eep  [D]elete  [R]eply"),
+                ],
+                sender_id,
+                interface,
+            )
+            update_user_state(
+                sender_id,
+                {
+                    "command": "MAIL",
+                    "step": 4,
+                    "mail_id": mail_id,
+                    "unique_id": unique_id,
+                    "sender": sender,
+                    "subject": subject,
+                    "content": content,
+                },
+            )
         except TypeError:
             logging.info(f"Node {sender_id} tried to access non-existent message")
-            _show_mail_inbox(
-                sender_id, interface,
+            _show_mail_inbox_list(
+                sender_id,
+                interface,
+                visible_mail,
                 prefix_messages=["Mail not found."],
+                mail_filter=mail_filter,
             )
 
     elif step == 3:
@@ -519,18 +661,6 @@ def handle_mail_steps(sender_id, message, step, state, interface, bbs_nodes):
                 f"Mail has been posted to the mailbox of {recipient_name}.",
                 "Send another message? [Y]es / [N]o",
             ], sender_id, interface)
-
-            notification_message = (
-                f"New mail from {sender_short_name}. Type HELP and press R to read mail."
-            )
-            try:
-                if is_hex_node_id(final_recipient_id):
-                    send_message(notification_message, final_recipient_id, interface)
-            except Exception as e:
-                logging.error(
-                    f"Failed to notify mail recipient {final_recipient_id}: {e}",
-                    exc_info=True,
-                )
         else:
             state['content'] += message + "\n"
             update_user_state(sender_id, state)
@@ -546,6 +676,66 @@ def handle_mail_steps(sender_id, message, step, state, interface, bbs_nodes):
 
 def _channel_directory_menu():
     return with_exit_prompt("= Channel Directory =\nSelect option:\n[V]iew  [P]ost")
+
+
+def dispatch_main_menu_key(sender_id, interface, menu_key):
+    """Route a main-menu key to core service handlers or a module override."""
+    from .core_services import (
+        MAIN_MENU_HANDLER_KEYS,
+        is_core_mail_enabled,
+        is_core_service_enabled,
+        is_mail_commands_on_main_menu,
+    )
+
+    menu_key = (menu_key or "").lower()
+    if is_core_mail_enabled() and is_mail_commands_on_main_menu():
+        if menu_key == "r":
+            handle_read_mail_command(sender_id, interface)
+            return
+        if menu_key == "s":
+            handle_send_mail_command(sender_id, interface)
+            return
+    manager = getattr(interface, "module_manager", None)
+    module_entry = manager.get_by_menu_option(menu_key) if manager else None
+    if module_entry:
+        row, _instance = module_entry
+        main_menu_visible = row[6] if len(row) > 6 else "N"
+        if main_menu_visible == "Y":
+            if manager.on_module_enter(row[0], sender_id, interface):
+                return
+            handle_help_command(sender_id, interface)
+            return
+
+    core_handlers = {
+        "b": handle_bulletin_command,
+        "c": handle_channel_directory_command,
+        "m": handle_mail_menu_command,
+        "o": handle_modules_command,
+        "x": handle_help_command,
+    }
+    handler = core_handlers.get(menu_key)
+    if handler is None:
+        handle_help_command(sender_id, interface)
+        return
+
+    cfg_key = MAIN_MENU_HANDLER_KEYS.get(menu_key)
+    if (
+        menu_key == "m"
+        and is_core_mail_enabled()
+        and is_mail_commands_on_main_menu()
+    ):
+        handle_help_command(sender_id, interface)
+        return
+    if cfg_key is None or is_core_service_enabled(cfg_key):
+        handler(sender_id, interface)
+        return
+
+    if module_entry:
+        row, _instance = module_entry
+        if manager.on_module_enter(row[0], sender_id, interface):
+            return
+
+    handle_help_command(sender_id, interface)
 
 
 def handle_channel_directory_command(sender_id, interface, prefix_messages=None):

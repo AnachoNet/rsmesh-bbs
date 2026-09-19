@@ -1,0 +1,77 @@
+TODO for Release 1.2
+====================
+
+- Radio Management
+    - Pull identity: longName, shortName, role, firmwareVersion, hex_node_id, publicKey
+    - Pull hardware type: hwModel, macaddr
+    - Pull lora info: modemPreset, region
+    - Pull status: batteryLevel, voltage, uptimeSeconds, time, locationSource, latitude,
+      longitude, altitude
+    - Set interface type (serial or tcp)
+    - Set serial port (update config.yml on change)
+    - Set hostname (update config.yml on change)
+    - Set fixed location coordinates
+    - Set time
+    - Set Region
+    - Set modemPreset
+    - Set primary, secondary, tertiary admin node public keys
+    - Enable/disable wifi, bluetooth, ethernet
+    - Push channels from Channel Directory to secondary channels
+
+- Privileged Users
+    - Gives users/devices access to special functions on board
+    - Similar to sysadmin table
+    - Module can only be selected by user with handset node id in priv table
+    - Operator can delegate selected sysadmin functions to these users
+    - Would require identifying sysadmin functions
+    - Possibly use a second table to track all possible commands and required privs
+
+- Device Blacklist
+    - Ability to ban user by hex node id for misbehaving users
+    - Would be good to send an explanation in a message
+    - Would be good to make it a limited period ban (say 1 day, a week, etc) or
+      permanent
+
+- MQTT Integration for Sync
+    - Topic Structure
+      - MESH_BBS/{Originating_System_ID}/RS/{Protocol_Version}/{Type}/{json-payload}
+      - Can't think of a way to limit visibility for any users that have access to
+        the MQTT server.  Could operate with this topic structure and let peers set
+        up listeners as "subscribers".  Very different than the point-to-point nature
+        of mesh peers.
+    - Would be good if a board could publish to multiple MQTT servers
+
+- Bulletin Broadcast to Channel
+    - Associate bulletin boards to programmed radio channels (optional)
+    - Posts prompt for broadcast based on user privs
+    - Where permitted, send post to channel as soon as created
+    - Migrate SysAdmin/Urgent broadcast relationship to this model
+    - Add functionality to pull programmed Channels from radio (as in the Channels section
+      returned by meshtastic --info) in to the Channels table (with default set to not 
+      publish) to admin tool
+
+- JS8Call Module
+    - TC2 js8call implementation as an optional module
+
+- Event/Calendar Module
+    - Optional Module using module framework (depends on 1.1 module sync capability)
+    - Used to inform of coming events
+    - Track event name, day, month, year, start_time, end_time, location
+    - Have optional detail message as free text that mesh user can request when viewing
+      event list to be sent as a separate message (could have a website url, etc)
+    - Create through mesh and admin tool
+    - Cancel (Delete) through mesh by posting hex node id only (user can delete their own)
+    - Edit/Delete by admin tool
+    - Allow mesh users to set reminder for event.  Give option to send reminder week before,
+      day before, both
+
+- RangeCheck Module
+    - Privileged-only
+    - User registers a handset node id to module
+    - User sets time between checks (x) and total test duration (y)
+    - System sends location request to registered handsets every x minutes for y minutes
+    - Date/time, handset node id, and gps location are saved to database table
+    - Results are available in admin tool as a list sorted by date/time and grouped by 
+      node id
+
+

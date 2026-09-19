@@ -26,6 +26,12 @@ from rsmesh_bbs.version import APP_NAME, VERSION
 from rsmesh_bbs.config_init import initialize_config, get_interface, init_cli_parser, format_board_banner, DEFAULT_CONFIG_FILE
 from rsmesh_bbs.preflight import run_server_preflight
 from rsmesh_bbs.tc2_migration import prepare_tc2_upgrade, import_tc2_sync_peers_from_ini
+from rsmesh_bbs.release_migration import (
+    apply_database_upgrades,
+    prepare_release_upgrade,
+    finalize_release_upgrade,
+)
+from rsmesh_bbs.core_services import ensure_core_services_config
 from rsmesh_bbs.db_operations import (
     initialize_database,
     ensure_superuser_sysadmin,
@@ -35,6 +41,7 @@ from rsmesh_bbs.db_operations import (
     get_sync_peers,
     reload_sync_peers,
     sync_pending_records,
+    sync_mesh_nodes_to_peers,
     normalize_sync_peer_last_heard,
     ensure_sys_config_from_yaml,
     get_peer_sync_seconds,
@@ -44,10 +51,15 @@ from rsmesh_bbs.db_operations import (
 )
 from rsmesh_bbs.module_loader import ModuleManager
 from rsmesh_bbs.time_format import format_relative_time
-from rsmesh_bbs.utils import join_display_fields, drain_outbound_user_messages
+from rsmesh_bbs.utils import (
+    join_display_fields,
+    drain_outbound_user_messages,
+    MESH_NODE_SYNC_DELAY_SECONDS,
+)
 from rsmesh_bbs.urgent_alerts import drain_pending_urgent_alerts
 from rsmesh_bbs.message_processing import on_receive
 from rsmesh_bbs.node_resolution import scan_mesh_nodes_store
+from rsmesh_bbs.admin_journal import attach_server_file_logging
 from pubsub import pub
 
 # General logging
@@ -64,12 +76,19 @@ def main():
     args = init_cli_parser()
     config_file = args.config if args.config is not None else DEFAULT_CONFIG_FILE
     prepare_tc2_upgrade(config_file)
+    prepare_release_upgrade(config_file)
     run_server_preflight(config_file)
     system_config = initialize_config(config_file)
     display_banner(system_config['board_name'])
 
     initialize_database()
+    apply_database_upgrades()
     ensure_sys_config_from_yaml(config_file)
+    log_file_path = attach_server_file_logging(config_file)
+    if log_file_path is not None:
+        logging.info("Server logging to %s", log_file_path)
+    ensure_core_services_config(config_file)
+    finalize_release_upgrade()
     import_tc2_sync_peers_from_ini()
 
     interface = get_interface(system_config)
@@ -156,13 +175,29 @@ def main():
 
     def sync_pending_worker():
         while True:
+            cycle_start = time.time()
             try:
                 reload_sync_peers(interface)
                 reload_admin_nodes(interface)
+                from rsmesh_bbs.peer_resync import (
+                    advance_resync_outbound,
+                    process_pending_resync_requests,
+                )
+
+                process_pending_resync_requests(interface)
                 sync_pending_records(interface.sync_peers, interface)
+                logging.info(
+                    "Waiting %s seconds before mesh nodes sync.",
+                    MESH_NODE_SYNC_DELAY_SECONDS,
+                )
+                time.sleep(MESH_NODE_SYNC_DELAY_SECONDS)
+                sync_mesh_nodes_to_peers(interface.sync_peers, interface)
+                advance_resync_outbound(interface, max_steps=3)
             except Exception as e:
                 logging.error(f"Error syncing pending records: {e}")
-            time.sleep(get_peer_sync_seconds())
+            elapsed = time.time() - cycle_start
+            remainder = max(0, get_peer_sync_seconds() - elapsed)
+            time.sleep(remainder)
 
     sync_pending_thread = threading.Thread(target=sync_pending_worker, daemon=True)
     sync_pending_thread.start()

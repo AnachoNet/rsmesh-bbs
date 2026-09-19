@@ -12,7 +12,14 @@ from rsmesh_bbs.config_init import (
     missing_client_setup_files,
     print_incomplete_setup_error,
 )
+from rsmesh_bbs.core_services import ensure_core_services_config
+from rsmesh_bbs.db_operations import ensure_sys_config_from_yaml
 from rsmesh_bbs.db_operations import initialize_database
+from rsmesh_bbs.release_migration import (
+    apply_database_upgrades,
+    finalize_release_upgrade,
+    prepare_release_upgrade,
+)
 from rsmesh_bbs.mesh_client import BbsMeshClient, node_id_to_num
 from rsmesh_bbs.venv_guard import require_venv
 
@@ -71,13 +78,19 @@ def _parse_args(remaining, config_file, client_config_file):
         action="store_true",
         help="Skip mesh reply pacing delays (recommended for interactive use)",
     )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Show (no reply) when the BBS sends no response (debugging)",
+    )
     args = parser.parse_args(remaining)
     return args, config_file
 
 
-def _print_replies(replies):
+def _print_replies(replies, verbose=False):
     if not replies:
-        print("(no reply)")
+        if verbose:
+            print("(no reply)")
         return
     for reply in replies:
         print(reply)
@@ -98,12 +111,21 @@ def main() -> int:
         import time
         time.sleep = lambda *_args, **_kwargs: None
 
+    prepare_release_upgrade(config_file)
     initialize_database(quiet=True)
+    apply_database_upgrades()
+    ensure_sys_config_from_yaml(config_file)
+    ensure_core_services_config(config_file)
+    finalize_release_upgrade(quiet=True)
+    client_settings = get_client_settings(str(client_path))
     client = BbsMeshClient.create(
         client_node_id=args.node_id,
         client_node_num=args.node_num,
         client_short_name=args.short_name,
         client_long_name=args.long_name,
+        bbs_node_id=client_settings["virtual_node_id"],
+        bbs_short_name=client_settings["virtual_short_name"],
+        bbs_long_name=client_settings["virtual_long_name"],
     )
 
     clear_screen()
@@ -126,7 +148,7 @@ def main() -> int:
             if not line:
                 line = "x"
             replies = client.send(line)
-            _print_replies(replies)
+            _print_replies(replies, verbose=args.verbose)
     except KeyboardInterrupt:
         print("\nBye.")
 

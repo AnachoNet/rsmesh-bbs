@@ -1,11 +1,15 @@
 import logging
 
 from .command_handlers import (
-    handle_read_mail_command, handle_send_mail_command, handle_bulletin_command, handle_help_command,
-    handle_modules_command, handle_modules_steps,
-    handle_bb_steps, handle_mail_steps,
+    dispatch_main_menu_key,
+    dispatch_mesh_quick_command,
+    handle_help_command,
+    handle_mail_menu_steps,
+    handle_modules_steps,
+    handle_bb_steps,
+    handle_mail_steps,
     handle_bulletin_delete_steps,
-    handle_channel_directory_command, handle_channel_directory_steps,
+    handle_channel_directory_steps,
 )
 from .db_operations import (
     add_bulletin, add_mail, delete_bulletin_by_sync_identifier, delete_mail, delete_mail_from_sync,
@@ -13,6 +17,7 @@ from .db_operations import (
     add_channel, reload_sync_peers, reload_admin_nodes, get_sync_protocol_for_peer,
     ingest_mesh_node_sync, mark_channel_for_reconcile_by_sync,
 )
+from .module_sync import CORE_SYNC_PREFIXES, decode_module_rs_payload
 from .sync_wire import (
     RS_CHUNK_TYPE,
     SyncChunkAssembler,
@@ -24,17 +29,14 @@ from .sync_wire import (
 from .utils import (
     get_user_state, get_node_short_name, get_node_id_from_num, send_message,
     get_sync_peer_by_bbs_node, peer_accepts_inbound_sync, drain_outbound_user_messages,
+    redisplay_last_user_prompt,
 )
 from .node_resolution import is_hex_node_id, record_mesh_node_from_interface, record_mesh_node_from_packet
 
-main_menu_handlers = {
-    "r": handle_read_mail_command,
-    "s": handle_send_mail_command,
-    "b": handle_bulletin_command,
-    "c": handle_channel_directory_command,
-    "m": handle_modules_command,
-    "x": handle_help_command
-}
+def _main_menu_keys():
+    from .mesh_ui import get_main_menu_keys
+
+    return {key.lower() for key in get_main_menu_keys()}
 
 bulletin_menu_handlers = {
     "g": lambda sender_id, interface: handle_bb_steps(sender_id, '0', 1, {'board': 'General'}, interface, None),
@@ -50,10 +52,6 @@ board_action_handlers = {
     "d": lambda sender_id, interface, state: handle_bb_steps(sender_id, 'd', 2, state, interface, None),
     "x": handle_help_command
 }
-
-SYNC_PREFIXES = (
-    "RS|", "BULLETIN|", "MAIL|", "DELETE_BULLETIN|", "DELETE_MAIL|", "CHANNEL|",
-)
 
 _sync_chunk_assembler = SyncChunkAssembler()
 
@@ -112,9 +110,57 @@ def _legacy_pipe_sync_rejected(sender_node_id, record_type):
     return False
 
 
+def _module_sync_manager(interface):
+    return getattr(interface, "module_manager", None)
+
+
+def _inbound_module_sync_allowed(sender_node_id, interface, registration):
+    manager = _module_sync_manager(interface)
+    if manager is None or not manager.is_module_sync_enabled(registration.module_id):
+        logging.info(
+            "Ignoring inbound %s sync from %s; module %s disabled.",
+            registration.record_type,
+            sender_node_id,
+            registration.module_id,
+        )
+        return False
+    return _inbound_sync_allowed(sender_node_id, interface, registration.record_type)
+
+
+def _dispatch_module_rs_sync(message, interface, sender_node_id):
+    manager = _module_sync_manager(interface)
+    if manager is None:
+        return False
+    wire_version, msg_type, fields = decode_module_rs_payload(message)
+    registration = manager.lookup_sync_by_wire_type(msg_type)
+    if registration is None or registration.on_inbound_rs is None:
+        return False
+    if not _inbound_module_sync_allowed(sender_node_id, interface, registration):
+        return False
+    from .db_operations import note_rs_wire_version
+
+    note_rs_wire_version(sender_node_id, wire_version)
+    logging.info(
+        "Processing %s sync from %s (module %s).",
+        msg_type,
+        sender_node_id,
+        registration.module_id,
+    )
+    registration.on_inbound_rs(msg_type, fields, sender_node_id, interface)
+    return True
+
+
 def _inbound_sync_allowed(sender_node_id, interface, record_type):
+    from .core_services import is_core_sync_enabled
+
+    if not is_core_sync_enabled(record_type):
+        logging.info(
+            f"Ignoring inbound {record_type} sync from {sender_node_id}; "
+            f"core service disabled locally."
+        )
+        return False
     peer = get_sync_peer_by_bbs_node(sender_node_id, getattr(interface, 'sync_peers', None))
-    if not peer_accepts_inbound_sync(peer, record_type):
+    if not peer_accepts_inbound_sync(peer, record_type, interface):
         logging.info(
             f"Ignoring inbound {record_type} sync from {sender_node_id}; "
             f"ingest disabled for this peer."
@@ -152,6 +198,13 @@ def _sync_ingest_mail(
 
 
 def _process_rs_sync_message(sender_id, message, interface, sender_node_id):
+    manager = _module_sync_manager(interface)
+    if manager is not None:
+        _, msg_type, _payload = parse_rs_envelope(message)
+        if manager.lookup_sync_by_wire_type(msg_type) is not None:
+            _dispatch_module_rs_sync(message, interface, sender_node_id)
+            return
+
     msg_type, fields = decode_rs_sync_message(message, sender_node_id)
     if msg_type == "BULLETIN":
         if not _inbound_sync_allowed(sender_node_id, interface, 'bulletins'):
@@ -180,19 +233,26 @@ def _process_rs_sync_message(sender_id, message, interface, sender_node_id):
             fields["unique_id"],
             interface,
         )
-    elif msg_type == "NODE":
+    elif msg_type == "NODES":
         if not _inbound_sync_allowed(sender_node_id, interface, 'mesh_nodes'):
             return
         if not is_rs_sync_protocol(get_sync_protocol_for_peer(sender_node_id) or 'tc2'):
-            logging.info(f"Ignoring NODE sync from non-RS peer {sender_node_id}.")
+            logging.info(f"Ignoring NODES sync from non-RS peer {sender_node_id}.")
             return
-        ingest_mesh_node_sync(
-            fields["node_id"],
-            fields["short_name"],
-            fields["long_name"],
-            fields["last_heard"],
-            sender_node_id=sender_node_id,
+        nodes = fields.get("nodes") or []
+        logging.info(
+            "Ingesting NODES sync (%d nodes) from %s.",
+            len(nodes),
+            sender_node_id,
         )
+        for node in nodes:
+            ingest_mesh_node_sync(
+                node["node_id"],
+                node["short_name"],
+                node["long_name"],
+                node["last_heard"],
+                sender_node_id=sender_node_id,
+            )
     elif msg_type == "DELETE_BULLETIN":
         if not _inbound_sync_allowed(sender_node_id, interface, 'bulletins'):
             return
@@ -221,6 +281,10 @@ def _process_rs_sync_message(sender_id, message, interface, sender_node_id):
             )
             return
         mark_channel_for_reconcile_by_sync(fields["unique_id"], sender_node_id)
+    elif msg_type == "RESYNC_REQUEST":
+        from .peer_resync import handle_inbound_resync_request
+
+        handle_inbound_resync_request(sender_node_id, interface)
     else:
         raise ValueError(f"Unsupported RS sync message type: {msg_type}")
 
@@ -301,6 +365,10 @@ def _handle_user_message(sender_id, message, interface):
     message_lower = message.lower().strip()
     bbs_nodes = interface.bbs_nodes
 
+    if message.strip() == "??":
+        redisplay_last_user_prompt(sender_id, interface)
+        return
+
     if len(message_lower) == 2 and message_lower[1] == 'x':
         message_lower = message_lower[0]
 
@@ -314,6 +382,9 @@ def _handle_user_message(sender_id, message, interface):
 
         if command == 'MAIL':
             handle_mail_steps(sender_id, message, step, state, interface, bbs_nodes)
+            return
+        elif command == 'MAIL_MENU':
+            handle_mail_menu_steps(sender_id, message, step, interface)
             return
         elif command == 'MODULES':
             handle_modules_steps(sender_id, message, step, interface)
@@ -344,12 +415,20 @@ def _handle_user_message(sender_id, message, interface):
             handle_bulletin_delete_steps(sender_id, message, step, state, interface, bbs_nodes)
             return
 
+    on_main_menu = not state or state.get('command') == 'MAIN_MENU'
+    if on_main_menu:
+        if dispatch_mesh_quick_command(sender_id, interface, message_lower):
+            return
+        if message_lower in _main_menu_keys():
+            dispatch_main_menu_key(sender_id, interface, message_lower)
+        else:
+            handle_help_command(sender_id, interface)
+        return
+
     if state and state['command'] == 'BULLETIN_MENU':
         handlers = bulletin_menu_handlers
     elif state and state['command'] == 'BULLETIN_ACTION':
         handlers = board_action_handlers
-    elif not state or state.get('command') == 'MAIN_MENU':
-        handlers = main_menu_handlers
     else:
         handlers = {}
 
@@ -392,7 +471,10 @@ def on_receive(packet, interface):
             logging.info(f"Received message from user '{sender_short_name}' ({sender_node_id}) to {receiver_short_name}: {message_string}")
 
             bbs_nodes = interface.bbs_nodes
-            is_sync_message = any(message_string.startswith(prefix) for prefix in SYNC_PREFIXES)
+            is_sync_message = any(
+                message_string.startswith(prefix)
+                for prefix in CORE_SYNC_PREFIXES
+            )
 
             if sender_node_id in bbs_nodes:
                 if is_sync_message:

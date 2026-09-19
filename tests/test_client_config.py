@@ -8,14 +8,14 @@ from rsmesh_bbs.config_init import (
     print_incomplete_setup_error,
     require_client_setup,
 )
-from rsmesh_bbs.mesh_client import node_id_to_num
+from rsmesh_bbs.mesh_client import BbsMeshClient, node_id_to_num
 
 
 class TestFormatHeaderLine:
     def test_version_right_aligned_at_column_79(self):
-        line = format_header_line("RSTest BBS Client : Node COFY (!0c0ffee0)", "1.0")
+        line = format_header_line("RSTest BBS Client : Node COFY (!0c0ffee0)", "1.1")
         assert len(line) == 79
-        assert line.endswith("1.0")
+        assert line.endswith("1.1")
         assert line.startswith("RSTest BBS Client")
 
 
@@ -40,7 +40,7 @@ class TestClientConfig:
         settings = get_client_settings(str(config_path))
         assert settings["node_id"] == "!0c0ffee0"
         assert settings["short_name"] == "COFY"
-        assert settings["long_name"] == "CLI Test User"
+        assert settings["long_name"] == "BBS Test Client"
 
     def test_get_client_settings_reads_long_name(self, tmp_path):
         config_path = tmp_path / "config_client.yml"
@@ -52,6 +52,42 @@ class TestClientConfig:
 
         settings = get_client_settings(str(config_path))
         assert settings["long_name"] == "Alice Handset"
+
+    def test_get_client_settings_uses_server_defaults(self, tmp_path):
+        config_path = tmp_path / "config_client.yml"
+        config_path.write_text("client: {}\n", encoding="utf-8")
+
+        settings = get_client_settings(str(config_path))
+        assert settings["virtual_node_id"] == "!aabbcc00"
+        assert settings["virtual_short_name"] == "BBS0"
+        assert settings["virtual_long_name"] == "RSMesh Virtual Radio"
+
+    def test_get_client_settings_reads_server_section(self, tmp_path):
+        config_path = tmp_path / "config_client.yml"
+        config_path.write_text(
+            "server:\n"
+            "  virtual_node_id: \"!11223344\"\n"
+            "  virtual_short_name: RSVR\n"
+            "  virtual_long_name: Test BBS Radio\n",
+            encoding="utf-8",
+        )
+
+        settings = get_client_settings(str(config_path))
+        assert settings["virtual_node_id"] == "!11223344"
+        assert settings["virtual_short_name"] == "RSVR"
+        assert settings["virtual_long_name"] == "Test BBS Radio"
+
+
+class TestBbsMeshClientServerConfig:
+    def test_create_uses_configured_virtual_bbs_node(self, temp_db):
+        client = BbsMeshClient.create(
+            bbs_node_id="!11223344",
+            bbs_short_name="RSVR",
+            bbs_long_name="Test BBS Radio",
+        )
+
+        assert client.interface.myInfo.my_node_num == 0x11223344
+        assert client.interface.nodes["!11223344"]["user"]["shortName"] == "RSVR"
 
 
 class TestRequireClientSetup:
@@ -108,6 +144,34 @@ class TestRequireClientSetup:
         assert "board setup is incomplete" in err
         assert "Missing configuration file:" in err
         assert str(client_path) in err
+
+
+class TestClientPrintReplies:
+    @staticmethod
+    def _load_client_module(monkeypatch):
+        import importlib.util
+        from pathlib import Path
+
+        script_path = Path(__file__).resolve().parents[1] / "rsmesh-bbs_client.py"
+        spec = importlib.util.spec_from_file_location("rsmesh_bbs_client", script_path)
+        client_module = importlib.util.module_from_spec(spec)
+        monkeypatch.setattr(
+            "rsmesh_bbs.venv_guard.require_venv",
+            lambda: None,
+            raising=False,
+        )
+        spec.loader.exec_module(client_module)
+        return client_module
+
+    def test_empty_replies_silent_by_default(self, capsys, monkeypatch):
+        client_module = self._load_client_module(monkeypatch)
+        client_module._print_replies([])
+        assert capsys.readouterr().out == ""
+
+    def test_empty_replies_verbose_shows_placeholder(self, capsys, monkeypatch):
+        client_module = self._load_client_module(monkeypatch)
+        client_module._print_replies([], verbose=True)
+        assert capsys.readouterr().out == "(no reply)\n"
 
 
 class TestClientMainExit:

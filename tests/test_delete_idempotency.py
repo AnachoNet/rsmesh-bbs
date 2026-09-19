@@ -1,6 +1,9 @@
 import uuid
 
 from rsmesh_bbs import db_operations
+from rsmesh_bbs.message_processing import _process_rs_sync_message
+from rsmesh_bbs.mock_interface import MockMeshInterface
+from rsmesh_bbs.sync_wire import encode_delete_channel_sync_message
 
 
 def _count_rows(table, where_clause="", params=()):
@@ -28,7 +31,11 @@ class TestDeleteIdempotency:
         )
 
         assert db_operations.delete_bulletin_by_sync_identifier(unique_id, peer_node) is True
-        assert _count_rows("bulletins", "unique_id = ?", (unique_id,)) == 0
+        row = db_operations.get_db_connection().execute(
+            "SELECT deleted, delete_reconcile FROM bulletins WHERE unique_id = ?",
+            (unique_id,),
+        ).fetchone()
+        assert row == ("Y", "Y")
         assert db_operations.delete_bulletin_by_sync_identifier(unique_id, peer_node) is False
 
     def test_tc2_bulletin_delete_marks_reconcile_idempotently(self, temp_db):
@@ -75,6 +82,115 @@ class TestDeleteIdempotency:
         ).fetchone()
         assert row == ("Y", "Y")
         assert db_operations.mark_channel_for_reconcile_by_sync(unique_id, peer_node) is False
+
+    def test_peer_channel_delete_ignored_for_local_origin(self, temp_db):
+        peer_node = "!rspeer03"
+        unique_id = str(uuid.uuid4())
+        db_operations.add_sync_peer(peer_node, sync_protocol="rsv1")
+        db_operations.add_channel(
+            "mesh-chat",
+            "psk-local-origin",
+            unique_id=unique_id,
+        )
+
+        assert db_operations.mark_channel_for_reconcile_by_sync(unique_id, peer_node) is False
+        row = db_operations.get_db_connection().execute(
+            "SELECT deleted, delete_reconcile, from_sync FROM channels WHERE unique_id = ?",
+            (unique_id,),
+        ).fetchone()
+        assert row == ("N", "N", "N")
+        assert db_operations.get_reconcile_channels() == []
+
+    def test_peer_bulletin_delete_ignored_for_local_origin(self, temp_db):
+        peer_node = "!rspeer03b"
+        unique_id = str(uuid.uuid4())
+        db_operations.add_sync_peer(peer_node, sync_protocol="rsv1")
+        db_operations.add_bulletin(
+            "general",
+            "ALICE",
+            "Subject",
+            "Body",
+            [],
+            None,
+            unique_id=unique_id,
+        )
+
+        assert db_operations.delete_bulletin_by_sync_identifier(unique_id, peer_node) is False
+        row = db_operations.get_db_connection().execute(
+            "SELECT deleted, delete_reconcile, from_sync FROM bulletins WHERE unique_id = ?",
+            (unique_id,),
+        ).fetchone()
+        assert row == ("N", "N", "N")
+
+    def test_restore_reconcile_marks_bulletin_as_local(self, temp_db):
+        peer_node = "!rspeer03c"
+        unique_id = str(uuid.uuid4())
+        db_operations.add_sync_peer(peer_node, sync_protocol="rsv1")
+        db_operations.add_bulletin(
+            "general",
+            "ALICE",
+            "Subject",
+            "Body",
+            [],
+            None,
+            unique_id=unique_id,
+            from_sync=True,
+        )
+        conn = db_operations.get_db_connection()
+        bulletin_id = conn.execute(
+            "SELECT id FROM bulletins WHERE unique_id = ?", (unique_id,)
+        ).fetchone()[0]
+        assert db_operations.delete_bulletin_by_sync_identifier(unique_id, peer_node) is True
+        assert db_operations.restore_reconcile_bulletin(bulletin_id) is True
+
+        row = conn.execute(
+            "SELECT deleted, delete_reconcile, from_sync FROM bulletins WHERE id = ?",
+            (bulletin_id,),
+        ).fetchone()
+        assert row == ("N", "N", "N")
+        assert db_operations.delete_bulletin_by_sync_identifier(unique_id, peer_node) is False
+
+    def test_rs_delete_channel_sync_marks_reconcile(self, temp_db):
+        peer_node = "!rspeer04"
+        unique_id = str(uuid.uuid4())
+        db_operations.add_sync_peer(peer_node, sync_protocol="rsv1")
+        db_operations.add_channel(
+            "mesh-chat",
+            "psk-rs-delete",
+            from_sync=True,
+            unique_id=unique_id,
+        )
+        interface = MockMeshInterface()
+        interface.bbs_nodes = [peer_node]
+        db_operations.reload_sync_peers(interface)
+
+        message = encode_delete_channel_sync_message("rsv1", unique_id)
+        _process_rs_sync_message(0, message, interface, peer_node)
+
+        row = db_operations.get_db_connection().execute(
+            "SELECT deleted, delete_reconcile FROM channels WHERE unique_id = ?",
+            (unique_id,),
+        ).fetchone()
+        assert row == ("Y", "Y")
+        assert len(db_operations.get_reconcile_channels()) == 1
+
+    def test_purge_does_not_remove_peer_reconcile_channel(self, temp_db):
+        peer_node = "!rspeer05"
+        unique_id = str(uuid.uuid4())
+        db_operations.add_sync_peer(peer_node, sync_protocol="rsv1")
+        db_operations.add_channel(
+            "mesh-chat",
+            "psk-purge-reconcile",
+            from_sync=True,
+            unique_id=unique_id,
+        )
+        assert db_operations.mark_channel_for_reconcile_by_sync(unique_id, peer_node) is True
+
+        interface = MockMeshInterface()
+        interface.bbs_nodes = [peer_node]
+        db_operations.purge_deleted_channels(interface.bbs_nodes, interface)
+
+        assert _count_rows("channels", "unique_id = ?", (unique_id,)) == 1
 
     def test_mail_delete_is_idempotent(self, temp_db):
         unique_id = str(uuid.uuid4())

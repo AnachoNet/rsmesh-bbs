@@ -11,12 +11,13 @@ from .sync_wire import (
     encode_delete_channel_sync_message,
     encode_delete_mail_sync_message,
     encode_mail_sync_message,
-    encode_node_sync_message,
+    encode_nodes_sync_message,
     is_rs_sync_protocol,
     plan_sync_transmit_packets,
 )
 
 user_states = {}
+_last_user_displays = {}
 
 MESH_MESSAGE_MAX_SIZE = 200
 DISPLAY_FIELD_SEP = "  "
@@ -57,6 +58,63 @@ def bundle_bulletin_read_list(board_name, bulletins, footer=None, max_size=MESH_
     footer_bundle = f"{last}\n{footer}"
     if len(footer_bundle) <= max_size:
         bundles[-1] = footer_bundle
+    else:
+        bundles.append(footer)
+    return bundles
+
+
+def format_mail_inbox_summary_lines(mail_id, sender_short_name, subject, date, read_flag):
+    unread = (read_flag or "N").upper() == "N"
+    marker = " *" if unread else ""
+    return [
+        f"{mail_id} {date} from {sender_short_name}{marker}",
+        f"     Subj: {subject}",
+    ]
+
+
+def bundle_mail_inbox_list(
+    mail_rows,
+    footer=None,
+    summaries_per_message=3,
+    max_size=MESH_MESSAGE_MAX_SIZE,
+):
+    """Bundle compact mail summaries (2 lines each), up to N entries per mesh message."""
+    if footer is None:
+        footer = "Select message number to read:"
+    if not mail_rows:
+        return ["No messages."]
+
+    bundles = []
+    for chunk_start in range(0, len(mail_rows), summaries_per_message):
+        chunk = mail_rows[chunk_start : chunk_start + summaries_per_message]
+        lines = []
+        for row in chunk:
+            mail_id, sender_short_name, subject, date, _unique_id, read_flag = row
+            lines.extend(
+                format_mail_inbox_summary_lines(
+                    mail_id, sender_short_name, subject, date, read_flag
+                )
+            )
+        text = "\n".join(lines)
+        if len(text) <= max_size:
+            bundles.append(text)
+            continue
+        partial = ""
+        for line in lines:
+            candidate = line if not partial else f"{partial}\n{line}"
+            if len(candidate) <= max_size:
+                partial = candidate
+                continue
+            if partial:
+                bundles.append(partial)
+            partial = line[:max_size] if len(line) > max_size else line
+        if partial:
+            bundles.append(partial)
+
+    last = bundles[-1]
+    footer_text = f"{last}\n{footer}"
+    if len(footer_text) <= max_size:
+        bundles[-1] = footer_text
     else:
         bundles.append(footer)
     return bundles
@@ -122,6 +180,7 @@ def _wait_for_mesh_ack(interface):
 
 
 MESH_CHUNK_PACE_SECONDS = 2
+MESH_NODE_SYNC_DELAY_SECONDS = 90
 USER_MESSAGE_PACE_SECONDS = 3
 
 
@@ -205,7 +264,38 @@ def send_sync_message(message, destination, interface, sync_protocol=None):
     return True
 
 
-def send_message(message, destination, interface, require_ack=False, want_ack=None):
+def record_user_display(destination, messages):
+    if destination == BROADCAST_NUM:
+        return
+    texts = [text for text in (messages or []) if text]
+    if texts:
+        _last_user_displays[destination] = list(texts)
+
+
+def clear_user_display_cache():
+    _last_user_displays.clear()
+
+
+def redisplay_last_user_prompt(destination, interface):
+    messages = _last_user_displays.get(destination)
+    if not messages:
+        from .command_handlers import handle_help_command
+
+        handle_help_command(destination, interface)
+        return True
+    return send_user_messages(messages, destination, interface, record_display=False)
+
+
+def send_message(
+    message,
+    destination,
+    interface,
+    require_ack=False,
+    want_ack=None,
+    record_display=True,
+):
+    if record_display:
+        record_user_display(destination, [message])
     max_payload_size = MESH_MESSAGE_MAX_SIZE
     chunks = [
         message[i:i + max_payload_size]
@@ -227,15 +317,22 @@ def send_message(message, destination, interface, require_ack=False, want_ack=No
     return True
 
 
-def send_user_messages(messages, destination, interface):
+def send_user_messages(messages, destination, interface, record_display=True):
     """Send user-facing messages in order with pacing between each message."""
     if not messages:
         return True
 
+    if record_display:
+        record_user_display(destination, messages)
+
     for index, message in enumerate(messages):
         if not send_message(
-            message, destination, interface,
-            require_ack=False, want_ack=True,
+            message,
+            destination,
+            interface,
+            require_ack=False,
+            want_ack=True,
+            record_display=False,
         ):
             return False
         if index < len(messages) - 1:
@@ -246,13 +343,15 @@ def send_user_messages(messages, destination, interface):
     return True
 
 
-def send_user_message(message, destination, interface):
+def send_user_message(message, destination, interface, record_display=True):
     """Send a user-facing reply with brief pacing instead of ACK-wait.
 
     Mesh ACKs are unreliable for handset delivery ordering and waiting for them
     blocks the pubsub thread, preventing follow-up prompts and new input.
     """
-    return send_user_messages([message], destination, interface)
+    return send_user_messages(
+        [message], destination, interface, record_display=record_display
+    )
 
 
 _outbound_lock = threading.Lock()
@@ -263,6 +362,7 @@ def enqueue_user_messages(messages, destination, interface):
     """Queue paced user messages for delivery on the pubsub thread."""
     if not messages or interface is None:
         return
+    record_user_display(destination, messages)
     with _outbound_lock:
         _outbound_queue.append((list(messages), destination, interface))
 
@@ -383,9 +483,34 @@ def peer_enabled(peer):
     return (peer[PEER_ENABLED_INDEX] or 'Y').strip().upper() == 'Y'
 
 
-def peer_sync_enabled(peer, record_type):
+def _peer_id_from_peer(peer):
+    if peer is None:
+        return None
+    peer_id = peer[0]
+    if peer_id is not None:
+        return peer_id
+    from .db_operations import _peer_id_for_bbs_node
+    return _peer_id_for_bbs_node(sync_peer_bbs_node(peer))
+
+
+def _module_id_for_record_type(record_type, interface):
+    from .module_sync import module_id_for_record_type
+    return module_id_for_record_type(record_type, interface)
+
+
+def peer_sync_enabled(peer, record_type, interface=None):
     if not peer_enabled(peer):
         return False
+    module_id = _module_id_for_record_type(record_type, interface)
+    if module_id is not None:
+        if not is_rs_sync_protocol(sync_peer_protocol(peer)):
+            return False
+        from .db_operations import get_sync_peer_module_flags
+        peer_id = _peer_id_from_peer(peer)
+        if peer_id is None:
+            return False
+        sync_out, _ingest_in = get_sync_peer_module_flags(peer_id, module_id)
+        return sync_out == 'Y'
     index = PEER_SYNC_FLAG_INDEX.get(record_type)
     if index is None:
         return True
@@ -394,9 +519,19 @@ def peer_sync_enabled(peer, record_type):
     return (peer[index] or 'Y').strip().upper() == 'Y'
 
 
-def peer_ingest_enabled(peer, record_type):
+def peer_ingest_enabled(peer, record_type, interface=None):
     if record_type == 'mail':
-        return peer_sync_enabled(peer, 'mail')
+        return peer_sync_enabled(peer, 'mail', interface)
+    module_id = _module_id_for_record_type(record_type, interface)
+    if module_id is not None:
+        if not is_rs_sync_protocol(sync_peer_protocol(peer)):
+            return False
+        from .db_operations import get_sync_peer_module_flags
+        peer_id = _peer_id_from_peer(peer)
+        if peer_id is None:
+            return False
+        _sync_out, ingest_in = get_sync_peer_module_flags(peer_id, module_id)
+        return ingest_in == 'Y'
     index = PEER_INGEST_FLAG_INDEX.get(record_type)
     if index is None:
         return True
@@ -405,12 +540,12 @@ def peer_ingest_enabled(peer, record_type):
     return (peer[index] or 'Y').strip().upper() == 'Y'
 
 
-def peer_accepts_inbound_sync(peer, record_type):
+def peer_accepts_inbound_sync(peer, record_type, interface=None):
     if peer is None or not peer_enabled(peer):
         return False
     if record_type == 'mesh_nodes':
-        return peer_sync_enabled(peer, 'mesh_nodes')
-    return peer_ingest_enabled(peer, record_type)
+        return peer_sync_enabled(peer, 'mesh_nodes', interface)
+    return peer_ingest_enabled(peer, record_type, interface)
 
 
 def get_sync_peer_by_bbs_node(bbs_node, sync_peers=None):
@@ -425,8 +560,8 @@ def get_sync_peer_by_bbs_node(bbs_node, sync_peers=None):
     return None
 
 
-def filter_peers_for_record_type(peers, record_type):
-    return [peer for peer in peers if peer_sync_enabled(peer, record_type)]
+def filter_peers_for_record_type(peers, record_type, interface=None):
+    return [peer for peer in peers if peer_sync_enabled(peer, record_type, interface)]
 
 
 def sync_peer_nodes(sync_peers_or_nodes):
@@ -443,7 +578,7 @@ def get_sync_peers_from_interface(interface, fallback_nodes=None):
         return sync_peers
     if fallback_nodes:
         return [
-            (None, node, None, 'tc2', None, 'Y', 'Y', 'Y', 'N', 'Y', 'Y', 'N', None, 'Y')
+            (None, node, None, 'tc2', None, 'Y', 'Y', 'Y', 'N', 'Y', 'Y', 'N', None, 'Y', 'Y')
             for node in fallback_nodes
         ]
     return []
@@ -524,24 +659,25 @@ def send_mail_to_bbs_nodes(
     return synced_peers
 
 
-def send_mesh_node_to_peer(node_id, short_name, long_name, last_heard, peer, interface):
-    message = encode_node_sync_message(
-        sync_peer_protocol(peer),
-        node_id,
-        short_name,
-        long_name,
-        last_heard,
-    )
+def send_mesh_nodes_batch_to_peer(nodes, peer, interface):
+    if not nodes:
+        return True
+    sync_protocol = sync_peer_protocol(peer)
+    message = encode_nodes_sync_message(sync_protocol, nodes)
     bbs_node = sync_peer_bbs_node(peer)
     if send_sync_message(
         message,
         bbs_node,
         interface,
-        sync_protocol=sync_peer_protocol(peer),
+        sync_protocol=sync_protocol,
     ):
         _touch_sync_peer_last_heard(bbs_node)
         return True
-    logging.warning(f"Mesh node sync to {bbs_node} failed.")
+    logging.warning(
+        "Mesh nodes batch sync (%d nodes) to %s failed.",
+        len(nodes),
+        bbs_node,
+    )
     return False
 
 

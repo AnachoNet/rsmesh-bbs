@@ -14,6 +14,36 @@ from .version import APP_NAME, VERSION
 
 DEFAULT_CONFIG_FILE = "config.yml"
 DEFAULT_CLIENT_CONFIG_FILE = "config_client.yml"
+EXAMPLE_CONFIG_FILE = "example_config.yml"
+
+_APP_ROOT = Path(__file__).resolve().parent.parent
+
+SYS_CONFIG_SECTION_LABELS = {
+    "bbs": "BBS",
+    "interface": "Interface",
+    "schedule": "Schedule",
+}
+
+DATABASE_VERSION_SECTION = "bbs"
+DATABASE_VERSION_KEY = "database_version"
+
+# Internal sys_config keys: not editable via admin and not exported to config.yml.
+SYS_CONFIG_PROTECTED_KEYS = frozenset({
+    (DATABASE_VERSION_SECTION, DATABASE_VERSION_KEY),
+})
+
+# Keys managed on other admin screens; still required in sys_config but hidden here.
+SYS_CONFIG_ADMIN_EXCLUDED_KEYS = frozenset({
+    ("bbs", "core_bulletins"),
+    ("bbs", "core_mail"),
+    ("bbs", "core_channels"),
+    ("bbs", "mail_commands_on_main_menu"),
+    ("bbs", "suppress_modules_menu"),
+}) | SYS_CONFIG_PROTECTED_KEYS
+
+
+def is_sys_config_key_protected(cfg_section, cfg_key):
+    return ((cfg_section or "").strip(), (cfg_key or "").strip()) in SYS_CONFIG_PROTECTED_KEYS
 
 
 def require_config_file(config_file: Optional[str] = None) -> str:
@@ -80,6 +110,9 @@ def load_client_config(client_config_file: Optional[str] = None) -> dict[str, An
 
 def get_client_settings(client_config_file: Optional[str] = None) -> dict[str, str]:
     from .mesh_client import (
+        DEFAULT_BBS_LONG_NAME,
+        DEFAULT_BBS_NODE_ID,
+        DEFAULT_BBS_SHORT_NAME,
         DEFAULT_CLIENT_LONG_NAME,
         DEFAULT_CLIENT_NODE_ID,
         DEFAULT_CLIENT_SHORT_NAME,
@@ -87,10 +120,14 @@ def get_client_settings(client_config_file: Optional[str] = None) -> dict[str, s
 
     config = load_client_config(client_config_file)
     client = config.get("client", {})
+    server = config.get("server", {})
     return {
         "node_id": client.get("node_id", DEFAULT_CLIENT_NODE_ID),
         "short_name": client.get("short_name", DEFAULT_CLIENT_SHORT_NAME),
         "long_name": client.get("long_name", DEFAULT_CLIENT_LONG_NAME),
+        "virtual_node_id": server.get("virtual_node_id", DEFAULT_BBS_NODE_ID),
+        "virtual_short_name": server.get("virtual_short_name", DEFAULT_BBS_SHORT_NAME),
+        "virtual_long_name": server.get("virtual_long_name", DEFAULT_BBS_LONG_NAME),
     }
 
 
@@ -111,6 +148,38 @@ def stringify_config_value(value: Any) -> str:
     return str(value)
 
 
+def get_example_config_path() -> Path:
+    return _APP_ROOT / EXAMPLE_CONFIG_FILE
+
+
+def load_example_config_defaults() -> list[tuple[str, str, str]]:
+    path = get_example_config_path()
+    if not path.is_file():
+        raise FileNotFoundError(f"Example configuration file not found: {path}")
+    return flatten_yaml_config(load_config(str(path)))
+
+
+def get_sys_config_schema() -> dict[str, list[str]]:
+    """Ordered section -> keys from example_config.yml."""
+    schema: dict[str, list[str]] = {}
+    for cfg_section, cfg_key, _cfg_value in load_example_config_defaults():
+        schema.setdefault(cfg_section, []).append(cfg_key)
+    return schema
+
+
+def get_sys_config_admin_schema() -> dict[str, list[str]]:
+    """Schema keys exposed under Administration -> System Configuration."""
+    schema = {}
+    for cfg_section, keys in get_sys_config_schema().items():
+        admin_keys = [
+            key for key in keys
+            if (cfg_section, key) not in SYS_CONFIG_ADMIN_EXCLUDED_KEYS
+        ]
+        if admin_keys:
+            schema[cfg_section] = admin_keys
+    return schema
+
+
 def flatten_yaml_config(config: dict[str, Any]) -> list[tuple[str, str, str]]:
     entries = []
     for section, values in config.items():
@@ -121,6 +190,25 @@ def flatten_yaml_config(config: dict[str, Any]) -> list[tuple[str, str, str]]:
                 continue
             entries.append((section, key, stringify_config_value(value)))
     return entries
+
+
+def build_ordered_config_from_entries(
+    entries: list[tuple[str, str, str]],
+    schema: Optional[dict[str, list[str]]] = None,
+) -> dict[str, Any]:
+    """Build a config dict using schema key order; omit keys outside the schema."""
+    schema = schema or get_sys_config_schema()
+    values = {(section, key): value for section, key, value in entries}
+    config: dict[str, Any] = {}
+    for section, keys in schema.items():
+        section_values = {}
+        for key in keys:
+            pair = (section, key)
+            if pair in values:
+                section_values[key] = parse_config_value(values[pair])
+        if section_values:
+            config[section] = section_values
+    return config
 
 
 def parse_config_value(value: Any) -> Any:
@@ -154,10 +242,17 @@ def build_config_from_sys_config_entries(entries: list[tuple[str, str, str]]) ->
 
 def export_sys_config_to_yaml(entries: list[tuple[str, str, str]], config_file: Optional[str] = None) -> str:
     path = Path(config_file or DEFAULT_CONFIG_FILE)
-    config = build_config_from_sys_config_entries(entries)
+    config = build_ordered_config_from_entries(entries)
     with path.open('w', encoding='utf-8') as handle:
         yaml.dump(config, handle, default_flow_style=False, sort_keys=False)
     return str(path)
+
+
+def ensure_config_yaml_schema(config_file: Optional[str] = None) -> bool:
+    """Release upgrade helper: merge example_config.yml keys into config.yml."""
+    from .release_migration import merge_release_config_yaml
+
+    return merge_release_config_yaml(config_file)
 
 
 def init_cli_parser() -> argparse.Namespace:
@@ -178,9 +273,34 @@ def init_cli_parser() -> argparse.Namespace:
 
 
 def get_board_name(config_file: Optional[str] = None) -> str:
-    config = load_config(config_file)
-    bbs = config.get('bbs', {})
-    return bbs.get('board_name', 'RSNetwork BBS')
+    try:
+        from .db_operations import get_sys_config_value
+
+        value = get_sys_config_value("bbs", "board_name")
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    except Exception:
+        pass
+
+    if config_file is not None:
+        path = Path(config_file)
+        if path.is_file():
+            config = load_config(str(path))
+            bbs = config.get("bbs", {})
+            name = (bbs.get("board_name") or "").strip()
+            if name:
+                return name
+
+    try:
+        config = load_config(config_file)
+        bbs = config.get("bbs", {})
+        name = (bbs.get("board_name") or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+
+    return "RSNetwork BBS"
 
 
 def format_board_banner(board_name: str, footer: str = None) -> str:

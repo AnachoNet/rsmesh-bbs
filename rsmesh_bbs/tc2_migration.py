@@ -1,7 +1,6 @@
 import configparser
 import logging
 import shutil
-import sqlite3
 import time
 import uuid
 from pathlib import Path
@@ -16,10 +15,15 @@ TC2_INI_FILE = "config.ini"
 
 
 def prepare_tc2_upgrade(config_file=None):
-    """Import TC2 config.ini and bulletins.db before RSMesh-BBS startup."""
+    """Import TC2 config.ini and bulletins.db, then apply release 1.1 config defaults."""
     config_file = config_file or DEFAULT_CONFIG_FILE
     migrated_ini = migrate_tc2_ini_to_yaml(config_file)
     migrated_db = import_tc2_database_file()
+    if migrated_ini or migrated_db:
+        from .release_migration import merge_release_config_yaml
+
+        if Path(config_file).is_file() and merge_release_config_yaml(config_file):
+            logging.info("Merged release 1.1 keys into %s after TC2 import.", config_file)
     if migrated_ini:
         print(f"Migrated {TC2_INI_FILE} to {config_file}.")
     if migrated_db:
@@ -146,220 +150,21 @@ def needs_tc2_database_migration(c):
 
 
 def migrate_tc2_database(c):
+    """TC2-specific schema steps, then full release 1.1 schema completion."""
     if not _table_exists(c, "bulletins"):
         return False
 
-    migrated = False
-    if needs_tc2_database_migration(c):
-        logging.info("Migrating stock TC2 database schema to RSMesh-BBS.")
-        if _table_exists(c, "channels") and "url" in _table_columns(c, "channels"):
-            _migrate_tc2_channels_url_to_psk(c)
-        _create_rsmesh_tables(c)
-        migrated = True
+    if not needs_tc2_database_migration(c):
+        return False
 
-    ensure_tc2_upgrade_schema(c)
-    return migrated
+    logging.info("Migrating stock TC2 database schema to RSMesh-BBS release %s.", "1.1")
+    if _table_exists(c, "channels") and "url" in _table_columns(c, "channels"):
+        _migrate_tc2_channels_url_to_psk(c)
+    _create_rsmesh_tables(c)
+    from .release_migration import ensure_release_1_1_schema
 
-
-def ensure_tc2_upgrade_schema(c):
-    """Idempotent schema completion for TC2 imports and interrupted upgrades."""
-    if not _table_exists(c, "bulletins"):
-        return
-
-    _upgrade_bulletins_schema(c)
-    _upgrade_mail_schema(c)
-    _upgrade_channels_schema(c)
-    _upgrade_sync_peers_schema(c)
-    _upgrade_node_catalog_schema(c)
-    _create_rsmesh_support_tables(c)
-
-
-def _upgrade_bulletins_schema(c):
-    _add_column_if_missing(c, "bulletins", "deleted", "TEXT NOT NULL DEFAULT 'N'")
-    _add_column_if_missing(c, "bulletins", "delete_reconcile", "TEXT NOT NULL DEFAULT 'N'")
-    _add_column_if_missing(c, "bulletins", "synced", "TEXT NOT NULL DEFAULT 'Y'")
-    _add_column_if_missing(c, "bulletins", "pinned", "TEXT NOT NULL DEFAULT 'N'")
-
-
-def _upgrade_mail_schema(c):
-    if not _table_exists(c, "mail"):
-        return
-
-    _add_column_if_missing(c, "mail", "synced", "TEXT NOT NULL DEFAULT 'Y'")
-    _add_column_if_missing(c, "mail", "read", "TEXT NOT NULL DEFAULT 'N'")
-    _add_column_if_missing(c, "mail", "recipient_short_name", "TEXT")
-    _migrate_mail_recipient_nullable(c)
-    _backfill_mail_recipient_short_names(c)
-
-
-def _upgrade_channels_schema(c):
-    if not _table_exists(c, "channels"):
-        return
-
-    _add_column_if_missing(c, "channels", "publish", "TEXT NOT NULL DEFAULT 'Y'")
-    _add_column_if_missing(c, "channels", "synced", "TEXT NOT NULL DEFAULT 'Y'")
-    _add_column_if_missing(c, "channels", "unique_id", "TEXT")
-    _add_column_if_missing(c, "channels", "deleted", "TEXT NOT NULL DEFAULT 'N'")
-    _add_column_if_missing(c, "channels", "delete_reconcile", "TEXT NOT NULL DEFAULT 'N'")
-
-
-def _node_catalog_public_key_is_nullable(c):
-    for _cid, name, _type, notnull, _dflt, _pk in c.execute(
-        "PRAGMA table_info(node_catalog)"
-    ).fetchall():
-        if name == "public_key":
-            return notnull == 0
+    ensure_release_1_1_schema(c)
     return True
-
-
-def _upgrade_node_catalog_schema(c):
-    if not _table_exists(c, "node_catalog"):
-        return
-    if _node_catalog_public_key_is_nullable(c):
-        return
-
-    c.execute(
-        """CREATE TABLE node_catalog_rsmesh (
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               long_name TEXT NOT NULL,
-               short_name TEXT NOT NULL,
-               node_hex_username TEXT NOT NULL,
-               mesh_admin TEXT NOT NULL DEFAULT 'N',
-               bbs_admin TEXT NOT NULL DEFAULT 'N',
-               bbs_mail_forward_to TEXT,
-               has_gps TEXT NOT NULL DEFAULT 'N',
-               public_key TEXT,
-               private_key TEXT,
-               ble_pin TEXT NOT NULL DEFAULT '123456',
-               hardware TEXT,
-               comment TEXT,
-               created TEXT NOT NULL,
-               updated TEXT NOT NULL
-           )"""
-    )
-    c.execute(
-        """INSERT INTO node_catalog_rsmesh (
-               id, long_name, short_name, node_hex_username, mesh_admin, bbs_admin,
-               bbs_mail_forward_to, has_gps, public_key, private_key, ble_pin,
-               hardware, comment, created, updated
-           )
-           SELECT
-               id, long_name, short_name, node_hex_username, mesh_admin, bbs_admin,
-               bbs_mail_forward_to, has_gps, public_key, private_key, ble_pin,
-               hardware, comment, created, updated
-           FROM node_catalog"""
-    )
-    c.execute("DROP TABLE node_catalog")
-    c.execute("ALTER TABLE node_catalog_rsmesh RENAME TO node_catalog")
-    c.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_node_catalog_node "
-        "ON node_catalog(node_hex_username)"
-    )
-    c.execute(
-        "CREATE INDEX IF NOT EXISTS idx_node_catalog_short_name "
-        "ON node_catalog(short_name)"
-    )
-
-
-def _upgrade_sync_peers_schema(c):
-    if not _table_exists(c, "sync_peers"):
-        return
-
-    _add_column_if_missing(c, "sync_peers", "sync_mesh_nodes", "TEXT NOT NULL DEFAULT 'N'")
-    _add_column_if_missing(c, "sync_peers", "ingest_bulletins", "TEXT NOT NULL DEFAULT 'Y'")
-    _add_column_if_missing(c, "sync_peers", "ingest_channels", "TEXT NOT NULL DEFAULT 'Y'")
-    _add_column_if_missing(c, "sync_peers", "rs_version_alert", "TEXT NOT NULL DEFAULT 'N'")
-    _add_column_if_missing(c, "sync_peers", "rs_wire_version_seen", "INTEGER")
-    _add_column_if_missing(c, "sync_peers", "enabled", "TEXT NOT NULL DEFAULT 'Y'")
-    c.execute(
-        "UPDATE sync_peers SET sync_mesh_nodes = 'N' WHERE sync_protocol = 'tc2'"
-    )
-
-
-def _create_rsmesh_support_tables(c):
-    c.execute(
-        """CREATE TABLE IF NOT EXISTS mesh_nodes (
-               node_id TEXT PRIMARY KEY,
-               short_name TEXT,
-               long_name TEXT,
-               last_heard INTEGER,
-               last_updated INTEGER NOT NULL
-           )"""
-    )
-    c.execute(
-        """CREATE TABLE IF NOT EXISTS pending_sync_deletes (
-               record_type TEXT NOT NULL,
-               record_key TEXT NOT NULL,
-               created TEXT NOT NULL,
-               PRIMARY KEY (record_type, record_key)
-           )"""
-    )
-    c.execute(
-        """CREATE TABLE IF NOT EXISTS pending_urgent_alerts (
-               unique_id TEXT NOT NULL PRIMARY KEY,
-               sender_short_name TEXT NOT NULL,
-               subject TEXT NOT NULL,
-               created TEXT NOT NULL
-           )"""
-    )
-
-
-def _mail_recipient_is_nullable(c):
-    for _cid, name, _type, notnull, _dflt, _pk in c.execute("PRAGMA table_info(mail)").fetchall():
-        if name == "recipient":
-            return notnull == 0
-    return False
-
-
-def _migrate_mail_recipient_nullable(c):
-    if _mail_recipient_is_nullable(c):
-        return
-
-    c.execute(
-        """CREATE TABLE mail_rsmesh (
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               sender TEXT NOT NULL,
-               sender_short_name TEXT NOT NULL,
-               recipient TEXT,
-               recipient_short_name TEXT,
-               date TEXT NOT NULL,
-               subject TEXT NOT NULL,
-               content TEXT NOT NULL,
-               unique_id TEXT NOT NULL,
-               synced TEXT NOT NULL DEFAULT 'N',
-               read TEXT NOT NULL DEFAULT 'N'
-           )"""
-    )
-    c.execute(
-        """INSERT INTO mail_rsmesh (
-               id, sender, sender_short_name, recipient, recipient_short_name,
-               date, subject, content, unique_id, synced, read
-           )
-           SELECT
-               id, sender, sender_short_name, recipient, recipient_short_name,
-               date, subject, content, unique_id, synced, read
-           FROM mail"""
-    )
-    c.execute("DROP TABLE mail")
-    c.execute("ALTER TABLE mail_rsmesh RENAME TO mail")
-
-
-def _backfill_mail_recipient_short_names(c):
-    from .node_resolution import is_hex_node_id
-
-    rows = c.execute(
-        "SELECT id, recipient FROM mail WHERE recipient_short_name IS NULL OR recipient_short_name = ''"
-    ).fetchall()
-    for mail_id, recipient in rows:
-        recipient = (recipient or "").strip()
-        if not recipient:
-            continue
-        if is_hex_node_id(recipient):
-            continue
-        c.execute(
-            "UPDATE mail SET recipient_short_name = ?, recipient = NULL WHERE id = ?",
-            (recipient, mail_id),
-        )
 
 
 def _table_exists(c, table_name):
@@ -372,11 +177,6 @@ def _table_exists(c, table_name):
 
 def _table_columns(c, table_name):
     return [row[1] for row in c.execute(f"PRAGMA table_info({table_name})")]
-
-
-def _add_column_if_missing(c, table_name, column_name, definition):
-    if column_name not in _table_columns(c, table_name):
-        c.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
 
 def _migrate_tc2_channels_url_to_psk(c):

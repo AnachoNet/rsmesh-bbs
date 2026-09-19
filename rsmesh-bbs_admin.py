@@ -7,7 +7,19 @@ require_venv()
 
 from rsmesh_bbs.version import APP_NAME, VERSION
 
-from rsmesh_bbs.config_init import DEFAULT_CONFIG_FILE, export_sys_config_to_yaml, get_board_name, require_config_file
+from rsmesh_bbs.config_init import (
+    DEFAULT_CONFIG_FILE,
+    SYS_CONFIG_SECTION_LABELS,
+    export_sys_config_to_yaml,
+    get_board_name,
+    get_sys_config_admin_schema,
+    require_config_file,
+)
+from rsmesh_bbs.release_migration import (
+    apply_database_upgrades,
+    finalize_release_upgrade,
+    prepare_release_upgrade,
+)
 from rsmesh_bbs.utils import join_display_fields
 from rsmesh_bbs.time_format import format_relative_time, format_timestamp
 from rsmesh_bbs.db_operations import (
@@ -39,9 +51,7 @@ from rsmesh_bbs.db_operations import (
     backfill_sync_peer_last_heard,
     ensure_sys_config_from_yaml,
     get_sys_config_entries,
-    add_sys_config_entry,
     update_sys_config_entry,
-    delete_sys_config_entry,
     get_sysadmin_nodes,
     add_sysadmin_node,
     update_sysadmin_node,
@@ -61,10 +71,41 @@ from rsmesh_bbs.db_operations import (
     purge_mesh_nodes,
     export_mesh_nodes_to_csv,
     import_mesh_nodes_from_csv,
+    _peer_id_for_bbs_node,
+    get_module_by_id,
+    get_sync_peer_module_flags_for_peer,
+    set_sync_peer_module_flags,
 )
 from rsmesh_bbs.module_loader import load_module_admin, module_admin_available
+from rsmesh_bbs.module_sync import (
+    format_sync_alerts_summary,
+    get_module_sync_status,
+    get_module_sync_status_lines,
+    get_registered_module_sync_rows,
+)
 from rsmesh_bbs.backup import create_application_backup
+from rsmesh_bbs.core_services import (
+    CORE_SERVICE_KEYS,
+    CORE_SERVICE_LABELS,
+    MAIL_COMMANDS_ON_MAIN_MENU_LABEL,
+    ensure_core_services_config,
+    format_core_services_status_line,
+    is_core_bulletins_enabled,
+    is_core_channels_enabled,
+    is_core_mail_enabled,
+    is_core_service_enabled,
+    is_mail_commands_on_main_menu,
+    toggle_core_service,
+    toggle_mail_commands_on_main_menu,
+)
+from rsmesh_bbs.mesh_ui import (
+    defer_main_menu_regeneration,
+    is_suppress_modules_menu,
+    regenerate_main_menu_file,
+    toggle_suppress_modules_menu,
+)
 from rsmesh_bbs import admin_ui
+from rsmesh_bbs.admin_journal import follow_server_log, server_log_view_available
 
 # Shared terminal layout and display helpers (core + module admin extensions)
 console = admin_ui.console
@@ -144,9 +185,11 @@ def _center_line(text):
     padding = max(0, (DISPLAY_COLUMNS - len(text)) // 2)
     return (" " * padding + text)[:DISPLAY_COLUMNS]
 
-def _format_rs_version_alert_summary(count):
-    noun = "peer" if count == 1 else "peers"
-    return f"Sync alerts: RS version: {count} {noun}"
+def _format_sync_alerts_summary(status):
+    return format_sync_alerts_summary(
+        status["rs_version_alert_count"],
+        status.get("module_sync_alert_peer_count", 0),
+    )
 
 
 def _build_system_status_content_lines(include_sync_peers=True):
@@ -171,7 +214,9 @@ def _build_system_status_content_lines(include_sync_peers=True):
             content_lines.append(f"Sync peers: {peer_nodes}")
         else:
             content_lines.append("Sync peers: none")
-    content_lines.append(_format_rs_version_alert_summary(status['rs_version_alert_count']))
+    content_lines.append(_format_sync_alerts_summary(status))
+    content_lines.append("")
+    content_lines.append(format_core_services_status_line())
 
     return content_lines
 
@@ -189,23 +234,26 @@ def show_splash_screen():
     console.print()
     print_bold(_center_line(f"****    {get_board_name()}    ****"))
     console.print()
-    console.print()
     status_lines = _build_system_status_content_lines(include_sync_peers=False)
     _print_indented_status_lines(status_lines)
 
-    lines_used = PAGE_HEADER_LINE_COUNT + 4 + len(status_lines)
+    lines_used = PAGE_HEADER_LINE_COUNT + 3 + len(status_lines)
     prompt_continue(lines_used)
 
 def begin_form_screen(page_title):
     clear_screen()
     begin_data_display(page_title)
 
+def _format_record_origin(from_sync):
+    return "sync" if (from_sync or "N").strip().upper() == "Y" else "local"
+
+
 def _fetch_bulletins():
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, board, sender_short_name, date, subject, deleted, unique_id, delete_reconcile, synced, pinned "
-        "FROM bulletins"
+        "SELECT id, board, sender_short_name, date, subject, deleted, unique_id, delete_reconcile, "
+        "synced, pinned, from_sync FROM bulletins"
     )
     return c.fetchall()
 
@@ -221,7 +269,19 @@ def _group_bulletins_by_board(bulletins):
     return grouped, other
 
 def _bulletin_entry_lines(bulletin):
-    bulletin_id, _board, poster, date, subject, deleted, unique_id, reconcile, _synced, pinned = bulletin
+    (
+        bulletin_id,
+        _board,
+        poster,
+        date,
+        subject,
+        deleted,
+        unique_id,
+        reconcile,
+        _synced,
+        pinned,
+        from_sync,
+    ) = bulletin
     sync_label = get_sync_status_label('bulletins', unique_id)
     return [
         "  " + join_display_fields(
@@ -232,6 +292,7 @@ def _bulletin_entry_lines(bulletin):
         ),
         "    " + join_display_fields(
             f"UID: {unique_id}",
+            f"Origin: {_format_record_origin(from_sync)}",
             f"Del: {deleted}",
             f"Pinned: {pinned or 'N'}",
             f"Reconcile: {reconcile}",
@@ -273,8 +334,8 @@ def _fetch_bulletin_entry(bulletin_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, board, sender_short_name, date, subject, content, deleted, unique_id, delete_reconcile, pinned "
-        "FROM bulletins WHERE id = ?",
+        "SELECT id, board, sender_short_name, date, subject, content, deleted, unique_id, "
+        "delete_reconcile, pinned, from_sync FROM bulletins WHERE id = ?",
         (bulletin_id,),
     )
     return c.fetchone()
@@ -288,7 +349,19 @@ def _display_bulletin_detail(bulletin_id):
             f"Bulletin {bulletin_id} not found.",
         )
         return
-    bulletin_id, board, sender_short_name, date, subject, content, deleted, unique_id, delete_reconcile, pinned = row
+    (
+        bulletin_id,
+        board,
+        sender_short_name,
+        date,
+        subject,
+        content,
+        deleted,
+        unique_id,
+        delete_reconcile,
+        pinned,
+        from_sync,
+    ) = row
     sync_label = get_sync_status_label('bulletins', unique_id)
     detail_lines = _record_detail_lines((
         ("ID", bulletin_id),
@@ -298,6 +371,7 @@ def _display_bulletin_detail(bulletin_id):
         ("Subject", subject),
         ("Content", content),
         ("Unique ID", unique_id),
+        ("Origin", _format_record_origin(from_sync)),
         ("Deleted", deleted),
         ("Pinned", pinned or 'N'),
         ("Delete Reconcile", delete_reconcile),
@@ -390,13 +464,13 @@ def _fetch_channels():
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, name, psk, synced, publish, unique_id, deleted, delete_reconcile "
+        "SELECT id, name, psk, synced, publish, unique_id, deleted, delete_reconcile, from_sync "
         "FROM channels"
     )
     return c.fetchall()
 
 def _channel_entry_lines(channel):
-    channel_id, name, psk, _synced, publish, unique_id, deleted, reconcile = channel
+    channel_id, name, psk, _synced, publish, unique_id, deleted, reconcile, from_sync = channel
     sync_label = '*' if publish == 'N' else get_sync_status_label('channels', unique_id)
     return [
         join_display_fields(
@@ -407,6 +481,7 @@ def _channel_entry_lines(channel):
         ),
         "    " + join_display_fields(
             f"PSK: {psk}",
+            f"Origin: {_format_record_origin(from_sync)}",
             f"Del: {deleted}",
             f"Reconcile: {reconcile}",
         ),
@@ -432,7 +507,8 @@ def _fetch_channel_entry(channel_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "SELECT id, name, psk, synced, publish, unique_id, deleted, delete_reconcile FROM channels WHERE id = ?",
+        "SELECT id, name, psk, synced, publish, unique_id, deleted, delete_reconcile, from_sync "
+        "FROM channels WHERE id = ?",
         (channel_id,),
     )
     return c.fetchone()
@@ -446,7 +522,7 @@ def _display_channel_detail(channel_id):
             f"Channel {channel_id} not found.",
         )
         return
-    channel_id, name, psk, _synced, publish, unique_id, deleted, delete_reconcile = row
+    channel_id, name, psk, _synced, publish, unique_id, deleted, delete_reconcile, from_sync = row
     sync_label = '*' if publish == 'N' else get_sync_status_label('channels', unique_id)
     detail_lines = _record_detail_lines((
         ("ID", channel_id),
@@ -454,6 +530,7 @@ def _display_channel_detail(channel_id):
         ("PSK", psk),
         ("Publish", publish),
         ("Unique ID", unique_id),
+        ("Origin", _format_record_origin(from_sync)),
         ("Deleted", deleted),
         ("Delete Reconcile", delete_reconcile),
         ("Sync", sync_label),
@@ -603,10 +680,11 @@ def add_channel_entry():
     begin_form_screen("Add Channel")
     name = input_bold("Channel name: ").strip()
     psk = input_bold("Channel PSK: ").strip()
+    publish = _normalize_yn(input_bold("Publish (Y/N) [Y]: "), "Y")
     if not name or not psk:
         _finish_action_message("Channel name and PSK are required.", "Add Channel")
         return
-    add_channel(name, psk)
+    add_channel(name, psk, publish=publish)
     _finish_action_message(f"Channel '{name}' added.", "Add Channel")
 
 def edit_channel_entry():
@@ -1234,6 +1312,78 @@ def _sync_peer_alert_field(peer):
     return f"Alert: received RS v{seen}"
 
 
+def _prompt_allow_resync(sync_protocol, current='Y'):
+    if (sync_protocol or '').strip().lower() != 'rsv1':
+        return 'N'
+    current = current or 'Y'
+    return _normalize_yn(
+        input_bold(f"Allow resync (Y/N) [{current}]: "),
+        current,
+    )
+
+
+def _prompt_sync_peer_module_flags(peer_id, sync_protocol):
+    protocol = (sync_protocol or "").strip().lower()
+    if protocol != "rsv1":
+        print("Module sync: N/A (rsv1 only).")
+        return
+    registrations = get_registered_module_sync_rows()
+    if not registrations:
+        return
+    existing = get_sync_peer_module_flags_for_peer(peer_id)
+    print_bold("Module sync (rsv1 only; Enter keeps current value):")
+    for _registration, module_row in registrations:
+        module_id = module_row[0]
+        module_name = module_row[1]
+        sync_out, ingest_in = existing.get(module_id, ("Y", "Y"))
+        sync_out = _normalize_yn(
+            input_bold(f"  {module_name} sync out (Y/N) [{sync_out}]: "),
+            sync_out,
+        )
+        ingest_in = _normalize_yn(
+            input_bold(f"  {module_name} ingest in (Y/N) [{ingest_in}]: "),
+            ingest_in,
+        )
+        set_sync_peer_module_flags(peer_id, module_id, sync_out, ingest_in, persist=True)
+
+
+def _sync_peer_module_restriction_line(peer, module_rows):
+    if len(peer) < 4:
+        return None
+    if (peer[3] or "").strip().lower() != "rsv1":
+        return None
+    peer_id = peer[0]
+    flags = get_sync_peer_module_flags_for_peer(peer_id)
+    if not flags:
+        return None
+    module_names = {row[0]: row[1] for _registration, row in module_rows}
+    parts = []
+    for module_id, (sync_out, ingest_in) in sorted(
+        flags.items(),
+        key=lambda item: (module_names.get(item[0]) or f"Module {item[0]}").lower(),
+    ):
+        name = module_names.get(module_id)
+        if not name:
+            module_row = get_module_by_id(module_id)
+            name = module_row[1] if module_row else f"Module {module_id}"
+        if sync_out == "N":
+            parts.append(f"{name} out=N")
+        if ingest_in == "N":
+            parts.append(f"{name} in=N")
+    if not parts:
+        return None
+    return "  " + join_display_fields(f"Modules: {', '.join(parts)}")
+
+
+def _sync_peer_modules_configured(peer):
+    if len(peer) < 4:
+        return "N"
+    if (peer[3] or "").strip().lower() != "rsv1":
+        return "N"
+    flags = get_sync_peer_module_flags_for_peer(peer[0])
+    return "Y" if flags else "N"
+
+
 def _sync_peer_flag_lines(peer, last_heard_label=None):
     if len(peer) < 8:
         sync_bulletins, sync_mail, sync_channels = 'Y', 'Y', 'Y'
@@ -1244,9 +1394,12 @@ def _sync_peer_flag_lines(peer, last_heard_label=None):
         sync_mesh_nodes = peer[8] if len(peer) > 8 else 'N'
         ingest_bulletins = peer[9] if len(peer) > 9 else 'Y'
         ingest_channels = peer[10] if len(peer) > 10 else 'Y'
+    allow_resync = peer[14] if len(peer) > 14 else 'Y'
     mail_line_fields = [
         f"Mail: {sync_mail or 'Y'}",
         f"Mesh nodes: {sync_mesh_nodes or 'N'}",
+        f"Modules: {_sync_peer_modules_configured(peer)}",
+        f"Resync: {allow_resync or 'Y'}",
     ]
     if last_heard_label:
         mail_line_fields.append(f"Last heard: {last_heard_label}")
@@ -1265,6 +1418,7 @@ def _sync_peer_lines(rows):
     if not rows:
         return []
     lines = []
+    module_rows = get_registered_module_sync_rows()
     for peer in rows:
         peer_id, bbs_node, bbs_name, sync_protocol, last_heard = peer[:5]
         heard = format_relative_time(normalize_sync_peer_last_heard(last_heard))
@@ -1284,6 +1438,9 @@ def _sync_peer_lines(rows):
             fields.append(alert)
         lines.append(join_display_fields(*fields))
         lines.extend(_sync_peer_flag_lines(peer, heard))
+        module_line = _sync_peer_module_restriction_line(peer, module_rows)
+        if module_line:
+            lines.append(module_line)
     return lines
 
 def list_sync_peers():
@@ -1295,6 +1452,7 @@ def add_sync_peer_entry():
     bbs_node = input_bold("BBS node (e.g. !17d7e4b7): ").strip()
     bbs_name = input_bold("BBS name (optional): ").strip() or None
     sync_protocol = input_bold(f"Sync protocol ({'/'.join(SYNC_PROTOCOLS)}) [tc2]: ").strip() or 'tc2'
+    allow_resync = _prompt_allow_resync(sync_protocol, 'Y')
     sync_bulletins = _normalize_yn(input_bold("Sync bulletins out (Y/N) [Y]: "), 'Y')
     sync_mail = _normalize_yn(input_bold("Sync mail in/out (Y/N) [Y]: "), 'Y')
     sync_channels = _normalize_yn(input_bold("Sync channels out (Y/N) [Y]: "), 'Y')
@@ -1303,7 +1461,6 @@ def add_sync_peer_entry():
         sync_mesh_nodes = _normalize_yn(input_bold("Sync mesh nodes out/in (Y/N) [Y]: "), 'Y')
     ingest_bulletins = _normalize_yn(input_bold("Ingest bulletins in (Y/N) [Y]: "), 'Y')
     ingest_channels = _normalize_yn(input_bold("Ingest channels in (Y/N) [Y]: "), 'Y')
-    enabled = _normalize_yn(input_bold("Enabled (Y/N) [Y]: "), 'Y')
     if not bbs_node:
         _finish_action_message("BBS node is required.", "Add Sync Peer")
         return
@@ -1317,8 +1474,28 @@ def add_sync_peer_entry():
         sync_mesh_nodes=sync_mesh_nodes,
         ingest_bulletins=ingest_bulletins,
         ingest_channels=ingest_channels,
-        enabled=enabled,
+        enabled='Y',
+        allow_resync=allow_resync,
     ):
+        peer_id = _peer_id_for_bbs_node(bbs_node)
+        if peer_id is not None:
+            _prompt_sync_peer_module_flags(peer_id, sync_protocol)
+            enabled = _normalize_yn(input_bold("Enabled (Y/N) [Y]: "), 'Y')
+            if enabled != 'Y':
+                update_sync_peer(
+                    peer_id,
+                    bbs_node,
+                    sync_protocol,
+                    bbs_name,
+                    sync_bulletins=sync_bulletins,
+                    sync_mail=sync_mail,
+                    sync_channels=sync_channels,
+                    sync_mesh_nodes=sync_mesh_nodes,
+                    ingest_bulletins=ingest_bulletins,
+                    ingest_channels=ingest_channels,
+                    enabled=enabled,
+                    allow_resync=allow_resync,
+                )
         _finish_action_message(
             f"Sync peer {bbs_node} added with protocol {sync_protocol}.",
             "Add Sync Peer",
@@ -1358,10 +1535,12 @@ def edit_sync_peer_entry():
     ingest_bulletins = current[9] if len(current) > 9 else 'Y'
     ingest_channels = current[10] if len(current) > 10 else 'Y'
     enabled = current[13] if len(current) > 13 else 'Y'
+    allow_resync = current[14] if len(current) > 14 else 'Y'
     print_bold("Press Enter to keep the current value.")
     bbs_node = input_bold(f"BBS node [{bbs_node}]: ").strip() or bbs_node
     bbs_name = input_bold(f"BBS name [{bbs_name or ''}]: ").strip() or bbs_name
     sync_protocol = input_bold(f"Sync protocol ({'/'.join(SYNC_PROTOCOLS)}) [{sync_protocol}]: ").strip() or sync_protocol
+    allow_resync = _prompt_allow_resync(sync_protocol, allow_resync)
     sync_bulletins = _normalize_yn(
         input_bold(f"Sync bulletins out (Y/N) [{sync_bulletins}]: "),
         sync_bulletins,
@@ -1389,6 +1568,7 @@ def edit_sync_peer_entry():
         input_bold(f"Ingest channels in (Y/N) [{ingest_channels}]: "),
         ingest_channels,
     )
+    _prompt_sync_peer_module_flags(peer_id, sync_protocol)
     enabled = _normalize_yn(
         input_bold(f"Enabled (Y/N) [{enabled}]: "),
         enabled,
@@ -1405,10 +1585,43 @@ def edit_sync_peer_entry():
         ingest_bulletins=ingest_bulletins,
         ingest_channels=ingest_channels,
         enabled=enabled,
+        allow_resync=allow_resync,
     ):
         _finish_action_message(f"Sync peer {peer_id} updated.", "Edit Sync Peer")
     else:
         _finish_action_message("Could not update sync peer.", "Edit Sync Peer")
+
+def request_resync_from_peer():
+    rsv1_peers = [
+        row for row in get_sync_peers("rsv1")
+        if (row[13] if len(row) > 13 else "Y") == "Y"
+    ]
+    peer_id = _paginate_select(
+        "Request Resync",
+        _sync_peer_lines(rsv1_peers),
+        "No enabled rsv1 sync peers found.",
+        "Enter sync peer ID to request resync from or X=cancel:",
+        "Resync request cancelled.",
+    )
+    if _paginate_select_exit(peer_id):
+        return peer_id
+
+    target = next((row for row in rsv1_peers if str(row[0]) == peer_id), None)
+    if target is None:
+        _finish_action_message("Sync peer not found.", "Request Resync")
+        return
+    from rsmesh_bbs.peer_resync import queue_peer_resync_request
+
+    bbs_node = target[1]
+    if queue_peer_resync_request(bbs_node):
+        _finish_action_message(
+            f"Resync from {bbs_node} queued. The BBS server will send RESYNC_REQUEST "
+            f"when it is running (rsv1 only).",
+            "Request Resync",
+        )
+    else:
+        _finish_action_message("Could not queue resync request.", "Request Resync")
+
 
 def delete_sync_peer_entry():
     peer_id = _paginate_select(
@@ -1426,120 +1639,116 @@ def delete_sync_peer_entry():
     else:
         _finish_action_message("Sync peer not found.", "Delete Sync Peer")
 
-def _sys_config_lines(rows):
-    if not rows:
-        return []
-    return [
-        join_display_fields(
-            f"{index}.",
-            f"Section: {cfg_section}",
-            f"Key: {cfg_key}",
-            f"Value: {cfg_value}",
-        )
-        for index, (cfg_section, cfg_key, cfg_value) in enumerate(rows, 1)
-    ]
+def _sys_config_page_title(section_label):
+    return f"System Configuration : {section_label}"
 
-def list_sys_config():
-    paginate_display(
-        "List System Configuration",
-        _sys_config_lines(get_sys_config_entries()),
-        empty_message="No configuration entries found.",
+
+def _sys_config_section_rows(cfg_section):
+    from rsmesh_bbs.db_operations import get_sys_config_value
+
+    admin_schema = get_sys_config_admin_schema()
+    rows = []
+    for cfg_key in admin_schema.get(cfg_section, []):
+        cfg_value = get_sys_config_value(cfg_section, cfg_key, "")
+        rows.append((cfg_section, cfg_key, cfg_value if cfg_value is not None else ""))
+    return rows
+
+
+def _edit_sys_config_value(page_title, cfg_section, cfg_key, cfg_value):
+    from rsmesh_bbs.sys_config_fields import (
+        bool_value_to_yn,
+        get_field_spec,
+        validate_sys_config_value,
     )
-    return False
 
-def add_sys_config_entry_prompt():
-    begin_form_screen("Add Configuration Entry")
-    cfg_section = input_bold("Section (e.g. bbs, interface): ").strip()
-    cfg_key = input_bold("Key: ").strip()
-    cfg_value = input_bold("Value: ").strip()
-    if not cfg_section or not cfg_key:
-        _finish_action_message("Section and key are required.", "Add Configuration Entry")
-        return
-    if add_sys_config_entry(cfg_section, cfg_key, cfg_value):
-        _finish_action_message(
-            f"Configuration entry {cfg_section}.{cfg_key} added.",
-            "Add Configuration Entry",
-        )
+    spec = get_field_spec(cfg_section, cfg_key)
+    field_type = spec.get("type", "string")
+    begin_form_screen(page_title)
+    print_bold(f"Key: {cfg_key}")
+
+    if field_type == "bool":
+        current_yn = bool_value_to_yn(cfg_value)
+        entered = input_bold(f"Value (Y/N) [{current_yn}]: ").strip()
+        if not entered:
+            clear_screen()
+            return cfg_value
+        candidate = _normalize_yn(entered, current_yn)
+        valid, normalized, error = validate_sys_config_value(cfg_section, cfg_key, candidate)
+    elif field_type == "enum":
+        allowed = ", ".join(spec.get("values", ()))
+        print_bold(f"Valid values: {allowed}")
+        entered = input_bold(f"Value [{cfg_value}]: ").strip()
+        if not entered or entered == cfg_value:
+            clear_screen()
+            return cfg_value
+        valid, normalized, error = validate_sys_config_value(cfg_section, cfg_key, entered)
+    elif field_type == "int":
+        entered = input_bold(f"Value [{cfg_value}]: ").strip()
+        if not entered or entered == cfg_value:
+            clear_screen()
+            return cfg_value
+        valid, normalized, error = validate_sys_config_value(cfg_section, cfg_key, entered)
+    elif field_type == "node_id":
+        entered = input_bold(
+            f"Node ID (! + 8 hex digits, empty for connected radio) [{cfg_value}]: "
+        ).strip()
+        if entered == cfg_value:
+            clear_screen()
+            return cfg_value
+        valid, normalized, error = validate_sys_config_value(cfg_section, cfg_key, entered)
+    elif field_type == "short_name":
+        entered = input_bold(f"Short name (1-4 chars, empty for connected radio) [{cfg_value}]: ").strip()
+        if entered == cfg_value:
+            clear_screen()
+            return cfg_value
+        valid, normalized, error = validate_sys_config_value(cfg_section, cfg_key, entered)
     else:
-        _finish_action_message(
-            "Could not add entry. It may already exist.",
-            "Add Configuration Entry",
-        )
+        entered = input_bold(f"Value [{cfg_value}]: ").strip()
+        if not entered or entered == cfg_value:
+            clear_screen()
+            return cfg_value
+        valid, normalized, error = validate_sys_config_value(cfg_section, cfg_key, entered)
 
-def edit_sys_config_entry():
-    rows = get_sys_config_entries()
-    selection = _paginate_select(
-        "Edit Configuration Entry",
-        _sys_config_lines(rows),
-        "No configuration entries found.",
-        "Enter row # or X=cancel:",
-        "Edit cancelled.",
-    )
-    if _paginate_select_exit(selection):
-        return selection
+    if not valid:
+        _finish_action_message(error or "Invalid value.", page_title)
+        prompt_continue()
+        return cfg_value
+    if update_sys_config_entry(cfg_section, cfg_key, normalized):
+        clear_screen()
+        return normalized
+    _finish_action_message("Configuration entry not found.", page_title)
+    prompt_continue()
+    return cfg_value
 
-    try:
-        row_index = int(selection) - 1
-    except ValueError:
-        _finish_action_message("Invalid row number.", "Edit Configuration Entry")
-        return
 
-    if row_index < 0 or row_index >= len(rows):
-        _finish_action_message("Configuration entry not found.", "Edit Configuration Entry")
-        return
+def sys_config_section_menu(cfg_section, section_label, back_label="System Configuration"):
+    page_title = _sys_config_page_title(section_label)
+    rows = _sys_config_section_rows(cfg_section)
+    while True:
+        body_lines = [
+            f"{index}. {cfg_key} = {cfg_value or '(empty)'}"
+            for index, (_cfg_section, cfg_key, cfg_value) in enumerate(rows, 1)
+        ]
+        body_lines.append("")
+        body_lines.append(f"0. Back to {back_label}")
+        choice = render_menu_screen(page_title, body_lines)
+        clear_screen()
+        if choice == "0":
+            return False
+        try:
+            row_index = int(choice) - 1
+        except ValueError:
+            _finish_action_message("Invalid option. Try again.", page_title)
+            prompt_continue()
+            continue
+        if row_index < 0 or row_index >= len(rows):
+            _finish_action_message("Invalid option. Try again.", page_title)
+            prompt_continue()
+            continue
+        cfg_section, cfg_key, cfg_value = rows[row_index]
+        updated_value = _edit_sys_config_value(page_title, cfg_section, cfg_key, cfg_value)
+        rows[row_index] = (cfg_section, cfg_key, updated_value)
 
-    cfg_section, cfg_key, cfg_value = rows[row_index]
-    begin_form_screen("Edit Configuration Entry")
-    print_bold("Press Enter to keep the current value.")
-    cfg_section = input_bold(f"Section [{cfg_section}]: ").strip() or cfg_section
-    cfg_key = input_bold(f"Key [{cfg_key}]: ").strip() or cfg_key
-    cfg_value = input_bold(f"Value [{cfg_value}]: ").strip() or cfg_value
-
-    if (cfg_section, cfg_key) != (rows[row_index][0], rows[row_index][1]):
-        if delete_sys_config_entry(rows[row_index][0], rows[row_index][1]):
-            if add_sys_config_entry(cfg_section, cfg_key, cfg_value):
-                message = f"Configuration entry updated to {cfg_section}.{cfg_key}."
-            else:
-                add_sys_config_entry(rows[row_index][0], rows[row_index][1], rows[row_index][2])
-                message = "Could not update entry. Section/key may already exist."
-        else:
-            message = "Could not update entry."
-    elif update_sys_config_entry(cfg_section, cfg_key, cfg_value):
-        message = f"Configuration entry {cfg_section}.{cfg_key} updated."
-    else:
-        message = "Configuration entry not found."
-    _finish_action_message(message, "Edit Configuration Entry")
-
-def delete_sys_config_entry_prompt():
-    rows = get_sys_config_entries()
-    selection = _paginate_select(
-        "Delete Configuration Entry",
-        _sys_config_lines(rows),
-        "No configuration entries found.",
-        "Enter row # or X=cancel:",
-        "Deletion cancelled.",
-    )
-    if _paginate_select_exit(selection):
-        return selection
-
-    try:
-        row_index = int(selection) - 1
-    except ValueError:
-        _finish_action_message("Invalid row number.", "Delete Configuration Entry")
-        return
-
-    if row_index < 0 or row_index >= len(rows):
-        _finish_action_message("Configuration entry not found.", "Delete Configuration Entry")
-        return
-
-    cfg_section, cfg_key, _cfg_value = rows[row_index]
-    if delete_sys_config_entry(cfg_section, cfg_key):
-        _finish_action_message(
-            f"Configuration entry {cfg_section}.{cfg_key} deleted.",
-            "Delete Configuration Entry",
-        )
-    else:
-        _finish_action_message("Configuration entry not found.", "Delete Configuration Entry")
 
 def _sysadmin_node_lines(rows):
     if not rows:
@@ -1626,11 +1835,12 @@ def delete_sysadmin_node_entry():
         _finish_action_message("Sysadmin node not found.", "Delete Sysadmin Node")
 
 def export_sys_config_to_yaml_entry():
-    page_title = "Export Configuration to config.yml"
+    page_title = "System Configuration : Export"
     begin_form_screen(page_title)
     rows = get_sys_config_entries()
     if not rows:
         _finish_action_message("No configuration entries found to export.", page_title)
+        prompt_continue()
         return
 
     confirm = input_bold(
@@ -1638,13 +1848,18 @@ def export_sys_config_to_yaml_entry():
     ).strip().upper()
     if confirm != 'Y':
         _finish_action_message("Export cancelled.", page_title)
+        prompt_continue()
         return
 
     output_path = export_sys_config_to_yaml(rows, DEFAULT_CONFIG_FILE)
+    from rsmesh_bbs.config_init import get_sys_config_schema
+
+    schema_count = sum(len(keys) for keys in get_sys_config_schema().values())
     _finish_action_message(
-        f"Exported {len(rows)} configuration entries to {output_path}.",
+        f"Exported configuration to {output_path} ({schema_count} known settings).",
         page_title,
     )
+    prompt_continue()
 
 def backup_application_entry():
     page_title = "Backup"
@@ -1760,8 +1975,8 @@ def review_reconcile_channels():
     else:
         _finish_action_message("Invalid action.", "Review Reconcile Channels")
 
-def _unsynced_lines(bulletins, mail_rows, channels):
-    total = len(bulletins) + len(mail_rows) + len(channels)
+def _unsynced_lines(bulletins, mail_rows, channels, modules=()):
+    total = len(bulletins) + len(mail_rows) + len(channels) + len(modules)
     if total == 0:
         return []
 
@@ -1821,13 +2036,28 @@ def _unsynced_lines(bulletins, mail_rows, channels):
     else:
         lines.append(f"{section_indent}Channels: none")
 
+    if modules:
+        lines.append(f"{section_indent}Modules:")
+        for module_name, record_key, label, pending in modules:
+            pending_text = join_display_fields(*pending) if pending else "all peers"
+            lines.append(
+                entry_indent + join_display_fields(
+                    f"Module: {module_name}",
+                    f"Key: {record_key}",
+                    f"Label: {label}",
+                    f"Pending peers: {pending_text}",
+                )
+            )
+    else:
+        lines.append(f"{section_indent}Modules: none")
+
     return lines
 
 def list_unsynced_data():
-    bulletins, mail_rows, channels = get_unsynced_records()
+    bulletins, mail_rows, channels, modules = get_unsynced_records()
     paginate_display(
         "List Unsynced Data",
-        _unsynced_lines(bulletins, mail_rows, channels),
+        _unsynced_lines(bulletins, mail_rows, channels, modules),
         empty_message="No unsynced records found.",
     )
     return False
@@ -1845,8 +2075,22 @@ def _system_status_lines():
             lines.append(indent + line)
     return lines
 
+def _follow_server_log_from_status():
+    clear_screen()
+    ok, message = follow_server_log()
+    clear_screen()
+    if not ok and message:
+        _finish_action_message(message, "Server Log")
+        prompt_continue()
+
+
 def show_system_status():
-    paginate_display("System Status", _system_status_lines())
+    lines = _system_status_lines()
+    hotkeys = None
+    if server_log_view_available():
+        lines = lines + ["", f"{' ' * MENU_OPTION_INDENT}[V]iew server log (Ctrl-C to return)"]
+        hotkeys = {"V": _follow_server_log_from_status}
+    paginate_display("System Status", lines, hotkeys=hotkeys)
     return False
 
 def run_submenu(menu_name, options, back_label="Main Menu"):
@@ -1908,20 +2152,76 @@ def sync_peers_menu(back_label="Main Menu"):
         ("Add Sync Peer", add_sync_peer_entry),
         ("Edit Sync Peer", edit_sync_peer_entry),
         ("Delete Sync Peer", delete_sync_peer_entry),
+        ("Request Resync", request_resync_from_peer),
         ("List Unsynced Data", list_unsynced_data),
     ], back_label=back_label)
     return False
 
 
-def sys_config_menu(back_label="Main Menu"):
-    run_submenu("System Configuration", [
-        ("List Configuration", list_sys_config),
-        ("Add Configuration Entry", add_sys_config_entry_prompt),
-        ("Edit Configuration Entry", edit_sys_config_entry),
-        ("Delete Configuration Entry", delete_sys_config_entry_prompt),
-        ("Export Configuration to config.yml", export_sys_config_to_yaml_entry),
-    ], back_label=back_label)
-    return False
+def sys_config_menu(back_label="Administration"):
+    admin_schema = get_sys_config_admin_schema()
+    section_items = [
+        (SYS_CONFIG_SECTION_LABELS[cfg_section], cfg_section)
+        for cfg_section in admin_schema
+        if cfg_section in SYS_CONFIG_SECTION_LABELS
+    ]
+    while True:
+        body_lines = [
+            f"{index}. {section_label}"
+            for index, (section_label, _cfg_section) in enumerate(section_items, 1)
+        ]
+        body_lines.append(f"{len(section_items) + 1}. Export Configuration to config.yml")
+        body_lines.append("")
+        body_lines.append(f"0. Back to {back_label}")
+        choice = render_menu_screen("System Configuration", body_lines)
+        clear_screen()
+        if choice == "0":
+            return False
+        if choice == str(len(section_items) + 1):
+            export_sys_config_to_yaml_entry()
+            continue
+        try:
+            option_index = int(choice) - 1
+            if 0 <= option_index < len(section_items):
+                section_label, cfg_section = section_items[option_index]
+                sys_config_section_menu(cfg_section, section_label)
+            else:
+                _finish_action_message("Invalid option. Try again.", "System Configuration")
+                prompt_continue()
+        except ValueError:
+            _finish_action_message("Invalid option. Try again.", "System Configuration")
+            prompt_continue()
+
+
+def core_services_menu(back_label="Administration"):
+    while True:
+        body_lines = []
+        for index, cfg_key in enumerate(CORE_SERVICE_KEYS, 1):
+            label = CORE_SERVICE_LABELS[cfg_key]
+            state = "Enabled" if is_core_service_enabled(cfg_key) else "Disabled"
+            body_lines.append(f"{index}. {label} ({state})")
+        mail_main_state = "Enabled" if is_mail_commands_on_main_menu() else "Disabled"
+        body_lines.append(
+            f"{len(CORE_SERVICE_KEYS) + 1}. {MAIL_COMMANDS_ON_MAIN_MENU_LABEL} ({mail_main_state})"
+        )
+        body_lines.append("")
+        body_lines.append(f"0. Back to {back_label}")
+        choice = render_menu_screen("Core Services", body_lines)
+        clear_screen()
+        if choice == "0":
+            return False
+        try:
+            option_index = int(choice) - 1
+            if 0 <= option_index < len(CORE_SERVICE_KEYS):
+                toggle_core_service(CORE_SERVICE_KEYS[option_index])
+            elif option_index == len(CORE_SERVICE_KEYS):
+                toggle_mail_commands_on_main_menu()
+            else:
+                _finish_action_message("Invalid option. Try again.", "Core Services")
+                prompt_continue()
+        except ValueError:
+            _finish_action_message("Invalid option. Try again.", "Core Services")
+            prompt_continue()
 
 
 def sysadmin_nodes_menu(back_label="Main Menu"):
@@ -1934,14 +2234,32 @@ def sysadmin_nodes_menu(back_label="Main Menu"):
     return False
 
 
+def regenerate_main_menu_entry():
+    path = regenerate_main_menu_file()
+    _finish_action_message(f"Main menu regenerated: {path}", "Regenerate Main Menu")
+
+
 def administration_menu():
-    run_submenu("Administration", [
-        ("System Configuration", lambda: sys_config_menu("Administration")),
-        ("Sysadmin Nodes", lambda: sysadmin_nodes_menu("Administration")),
-        ("Sync Peers", lambda: sync_peers_menu("Administration")),
-        ("Modules", lambda: modules_admin_menu("Administration")),
-        ("Backup", backup_application_entry),
-    ])
+    with defer_main_menu_regeneration():
+        run_submenu("Administration", [
+            ("System Configuration", lambda: sys_config_menu("Administration")),
+            ("Core Services", lambda: core_services_menu("Administration")),
+            ("Regenerate Main Menu", regenerate_main_menu_entry),
+            ("Sysadmin Nodes", lambda: sysadmin_nodes_menu("Administration")),
+            ("Sync Peers", lambda: sync_peers_menu("Administration")),
+            ("Modules", lambda: modules_admin_menu("Administration")),
+            ("Backup", backup_application_entry),
+        ])
+
+
+def _module_sync_summary(module_id):
+    status = get_module_sync_status(module_id)
+    if status is None:
+        return None
+    if status.pending_peer_count:
+        noun = "peer" if status.pending_peer_count == 1 else "peers"
+        return f"Sync pending: {status.pending_peer_count} {noun}"
+    return "Sync: up to date"
 
 
 def _module_lines(rows):
@@ -1949,20 +2267,22 @@ def _module_lines(rows):
         return []
     lines = []
     for row in rows:
-        lines.append(
-            join_display_fields(
-                f"ID: {row[0]}",
-                f"Name: {row[1]}",
-                f"Menu: {row[3]}",
-            )
-        )
-        lines.append(
-            "  " + join_display_fields(
-                f"Dir: {row[2]}",
-                f"Enabled: {row[4]}",
-                f"Schedule: {row[5]}",
-            )
-        )
+        fields = [
+            f"ID: {row[0]}",
+            f"Name: {row[1]}",
+            f"Menu: {row[3]}",
+        ]
+        sync_summary = _module_sync_summary(row[0])
+        if sync_summary:
+            fields.append(sync_summary)
+        lines.append(join_display_fields(*fields))
+        detail_fields = [
+            f"Dir: {row[2]}",
+            f"Enabled: {row[4]}",
+            f"Schedule: {row[5]}",
+            f"Main Menu: {row[6]}",
+        ]
+        lines.append("  " + join_display_fields(*detail_fields))
     return lines
 
 
@@ -1991,28 +2311,109 @@ def edit_module_flags_entry():
         _finish_action_message("Module not found.", "Edit Module Flags")
         return
     begin_form_screen("Edit Module Flags")
+    print_bold(
+        join_display_fields(
+            f"Module: {current[1]}",
+            f"ID: {current[0]}",
+            f"Dir: {current[2]}",
+            f"Menu: {current[3]}",
+        )
+    )
+    console.print()
     enabled = _normalize_yn(input_bold(f"Enabled (Y/N) [{current[4]}]: "), current[4])
     schedule_enabled = _normalize_yn(
         input_bold(f"Schedule enabled (Y/N) [{current[5]}]: "),
         current[5],
     )
-    update_module_flags(current[0], enabled=enabled, schedule_enabled=schedule_enabled)
+    main_menu_visible = _normalize_yn(
+        input_bold(f"Show on main menu (Y/N) [{current[6]}]: "),
+        current[6],
+    )
+    update_module_flags(
+        current[0],
+        enabled=enabled,
+        schedule_enabled=schedule_enabled,
+        main_menu_visible=main_menu_visible,
+    )
     _finish_action_message(f"Module {current[1]} updated.", "Edit Module Flags")
+
+
+def _module_sync_status_lines_for_menu():
+    rows = []
+    for _registration, module_row in get_registered_module_sync_rows():
+        status = get_module_sync_status(module_row[0])
+        if status is None:
+            continue
+        summary = _module_sync_summary(module_row[0]) or "Sync: up to date"
+        rows.append(
+            join_display_fields(
+                f"ID: {module_row[0]}",
+                f"Name: {module_row[1]}",
+                summary,
+            )
+        )
+    return rows
+
+
+def view_module_sync_status_entry():
+    rows = get_registered_module_sync_rows()
+    if not rows:
+        paginate_display(
+            "Module Sync Status",
+            [],
+            empty_message="No modules register sync hooks.",
+        )
+        return False
+
+    selection = _paginate_select(
+        "Module Sync Status",
+        _module_sync_status_lines_for_menu(),
+        "No modules register sync hooks.",
+        "Enter module ID or X=cancel:",
+        "View cancelled.",
+    )
+    if _paginate_select_exit(selection):
+        return selection
+
+    module_row = next((row for _reg, row in rows if str(row[0]) == str(selection).strip()), None)
+    if module_row is None:
+        _finish_action_message("Module not found.", "Module Sync Status")
+        return
+
+    lines = get_module_sync_status_lines(module_row[0])
+    paginate_display(
+        f"Module Sync Status : {module_row[1]}",
+        [line for line in lines if line],
+        empty_message="No sync status available.",
+    )
+    return False
 
 
 def run_module_admin(module_dir_name, back_label="Modules"):
     admin_module = load_module_admin(module_dir_name)
     if admin_module is None or not hasattr(admin_module, "run_admin_menu"):
         _finish_action_message("Module admin is not available.", "Modules")
-        return False
+        return
     admin_module.run_admin_menu(run_submenu, back_label=back_label)
     return False
 
 
+def toggle_suppress_modules_menu_entry():
+    ok, message = toggle_suppress_modules_menu()
+    if not ok:
+        _finish_action_message(message, "Modules")
+        return
+    state = "on" if is_suppress_modules_menu() else "off"
+    _finish_action_message(f"Suppress Modules submenu is now {state}.", "Modules")
+
+
 def modules_admin_menu(back_label="Administration"):
+    suppress_state = "On" if is_suppress_modules_menu() else "Off"
     options = [
         ("List Modules", list_modules),
         ("Edit Module Flags", edit_module_flags_entry),
+        ("Module Sync Status", view_module_sync_status_entry),
+        (f"Suppress Modules Submenu ({suppress_state})", toggle_suppress_modules_menu_entry),
     ]
     for row in get_modules():
         if row[4] == 'Y' and module_admin_available(row[2]):
@@ -2050,20 +2451,55 @@ def node_catalog_menu(back_label="Main Menu"):
     return False
 
 
-def display_main_menu():
-    return render_menu_screen("Main Menu", [
+def _main_menu_body_lines():
+    lines = [
         "1. System Status",
         "2. Administration",
-        "3. Bulletins",
-        "4. Channels",
-        "5. Mail",
-        "",
-        "6. Node Catalog",
-        "",
-        "7. Mesh Nodes",
-        "",
-        "0. Exit",
-    ])
+    ]
+    option_number = 3
+    if is_core_bulletins_enabled():
+        lines.append(f"{option_number}. Bulletins")
+        option_number += 1
+    if is_core_channels_enabled():
+        lines.append(f"{option_number}. Channels")
+        option_number += 1
+    if is_core_mail_enabled():
+        lines.append(f"{option_number}. Mail")
+        option_number += 1
+    lines.append("")
+    lines.append(f"{option_number}. Node Catalog")
+    option_number += 1
+    lines.append("")
+    lines.append(f"{option_number}. Mesh Nodes")
+    lines.append("")
+    lines.append("0. Exit")
+    return lines
+
+
+def _main_menu_actions():
+    actions = {
+        "1": show_system_status,
+        "2": administration_menu,
+        "0": None,
+    }
+    option_number = 3
+    if is_core_bulletins_enabled():
+        actions[str(option_number)] = bulletins_menu
+        option_number += 1
+    if is_core_channels_enabled():
+        actions[str(option_number)] = channels_menu
+        option_number += 1
+    if is_core_mail_enabled():
+        actions[str(option_number)] = mail_menu
+        option_number += 1
+    actions[str(option_number)] = node_catalog_menu
+    option_number += 1
+    actions[str(option_number)] = mesh_nodes_menu
+    return actions
+
+
+def display_main_menu():
+    return render_menu_screen("Main Menu", _main_menu_body_lines())
 
 def input_select_row(prompt):
     console.print()
@@ -2072,10 +2508,9 @@ def input_select_row(prompt):
 def _finish_action_message(message, page_title):
     clear_screen()
     begin_data_display(page_title)
-    message_lines = message.splitlines() or [""]
-    for line in message_lines:
-        _print_no_data(line)
-    lines_used = PAGE_HEADER_LINE_COUNT + len(message_lines)
+    display_lines = admin_ui.message_lines_for_display(message)
+    admin_ui.render_message_body(message)
+    lines_used = PAGE_HEADER_LINE_COUNT + len(display_lines)
     _pad_to_line(MENU_SEPARATOR_LINE, lines_used)
     print_separator()
 
@@ -2097,32 +2532,25 @@ def _lines_used_from_result(result):
 def main():
     require_config_file()
     clear_screen()
+    prepare_release_upgrade()
     initialize_database(quiet=True)
+    apply_database_upgrades()
     ensure_sys_config_from_yaml()
+    ensure_core_services_config()
+    finalize_release_upgrade(quiet=True)
     backfill_sync_peer_last_heard()
     show_splash_screen()
     while True:
         choice = display_main_menu()
         clear_screen()
-        if choice == '1':
-            show_system_status()
-        elif choice == '2':
-            administration_menu()
-        elif choice == '3':
-            bulletins_menu()
-        elif choice == '4':
-            channels_menu()
-        elif choice == '5':
-            mail_menu()
-        elif choice == '6':
-            node_catalog_menu()
-        elif choice == '7':
-            mesh_nodes_menu()
-        elif choice == '0':
+        if choice == '0':
             break
-        else:
+        action = _main_menu_actions().get(choice)
+        if action is None:
             _finish_action_message("Invalid option. Try again.", "Main Menu")
             prompt_continue()
+            continue
+        action()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f"{APP_NAME} admin")
