@@ -1,6 +1,9 @@
 TODO for Release 1.2
 ====================
 
+- JS8Call Module
+    - TC2 js8call implementation as an optional module
+
 - Device Blacklist
     - Ability to ban user by hex node id for misbehaving users
     - Would be good to send an explanation in a message
