@@ -15,7 +15,11 @@ from rsmesh_bbs.config_init import (
 from rsmesh_bbs.core_services import ensure_core_services_config
 from rsmesh_bbs.db_operations import ensure_sys_config_from_yaml
 from rsmesh_bbs.db_operations import initialize_database
-from rsmesh_bbs.release_migration import finalize_release_upgrade, prepare_release_upgrade
+from rsmesh_bbs.release_migration import (
+    apply_database_upgrades,
+    finalize_release_upgrade,
+    prepare_release_upgrade,
+)
 from rsmesh_bbs.mesh_client import BbsMeshClient, node_id_to_num
 from rsmesh_bbs.venv_guard import require_venv
 
@@ -109,6 +113,7 @@ def main() -> int:
 
     prepare_release_upgrade(config_file)
     initialize_database(quiet=True)
+    apply_database_upgrades()
     ensure_sys_config_from_yaml(config_file)
     ensure_core_services_config(config_file)
     finalize_release_upgrade(quiet=True)

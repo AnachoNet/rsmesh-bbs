@@ -15,7 +15,11 @@ from rsmesh_bbs.config_init import (
     get_sys_config_admin_schema,
     require_config_file,
 )
-from rsmesh_bbs.release_migration import finalize_release_upgrade, prepare_release_upgrade
+from rsmesh_bbs.release_migration import (
+    apply_database_upgrades,
+    finalize_release_upgrade,
+    prepare_release_upgrade,
+)
 from rsmesh_bbs.utils import join_display_fields
 from rsmesh_bbs.time_format import format_relative_time, format_timestamp
 from rsmesh_bbs.db_operations import (
@@ -2530,6 +2534,7 @@ def main():
     clear_screen()
     prepare_release_upgrade()
     initialize_database(quiet=True)
+    apply_database_upgrades()
     ensure_sys_config_from_yaml()
     ensure_core_services_config()
     finalize_release_upgrade(quiet=True)

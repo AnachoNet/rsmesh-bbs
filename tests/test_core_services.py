@@ -1,4 +1,5 @@
 from rsmesh_bbs import db_operations
+from rsmesh_bbs.release_migration import prepare_release_upgrade
 from rsmesh_bbs.core_services import (
     CORE_BULLETINS_KEY,
     CORE_CHANNELS_KEY,
@@ -29,6 +30,7 @@ class TestCoreServicesConfig:
         config_path.write_text("bbs:\n  board_name: Test\n", encoding="utf-8")
         monkeypatch.setattr("rsmesh_bbs.config_init.DEFAULT_CONFIG_FILE", str(config_path))
         monkeypatch.setattr("rsmesh_bbs.db_operations.DEFAULT_CONFIG_FILE", str(config_path))
+        prepare_release_upgrade(str(config_path))
         db_operations.ensure_sys_config_from_yaml(str(config_path))
 
         text = config_path.read_text(encoding="utf-8")

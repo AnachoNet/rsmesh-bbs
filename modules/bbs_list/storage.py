@@ -44,45 +44,13 @@ def _connect():
     return conn
 
 
-def _table_columns(cursor, table_name):
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    return [row[1] for row in cursor.fetchall()]
-
-
-def _migrate_legacy_schema(cursor):
-    columns = _table_columns(cursor, "bbs_entries")
-    if not columns:
-        return
-    if "id" in columns:
-        return
-    cursor.execute(
-        """CREATE TABLE bbs_entries_new (
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               node_hex TEXT NOT NULL UNIQUE,
-               board_name TEXT NOT NULL,
-               short_name TEXT NOT NULL,
-               location TEXT,
-               sync_interest TEXT NOT NULL DEFAULT 'N',
-               is_local TEXT NOT NULL DEFAULT 'N',
-               updated INTEGER NOT NULL
-           )"""
-    )
-    cursor.execute(
-        """INSERT INTO bbs_entries_new
-           (node_hex, board_name, short_name, location, sync_interest, is_local, updated)
-           SELECT node_hex, board_name, short_name, location, sync_interest, is_local, updated
-           FROM bbs_entries
-           ORDER BY rowid"""
-    )
-    cursor.execute("DROP TABLE bbs_entries")
-    cursor.execute("ALTER TABLE bbs_entries_new RENAME TO bbs_entries")
-
-
 def setup_db():
+    from rsmesh_bbs.release_migration import migrate_bbs_list_module_schema
+
     conn = _connect()
     c = conn.cursor()
     c.execute(_CREATE_TABLE_SQL)
-    _migrate_legacy_schema(c)
+    migrate_bbs_list_module_schema(c)
     c.execute(
         "CREATE INDEX IF NOT EXISTS idx_bbs_entries_sync "
         "ON bbs_entries(sync_interest, board_name COLLATE NOCASE)"

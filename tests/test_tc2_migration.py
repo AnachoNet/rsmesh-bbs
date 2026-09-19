@@ -1,11 +1,16 @@
 import yaml
 
 from rsmesh_bbs import db_operations
-from rsmesh_bbs.release_migration import RELEASE_1_1, get_stored_database_version
+from rsmesh_bbs.release_migration import (
+    RELEASE_1_1,
+    apply_database_upgrades,
+    get_stored_database_version,
+)
+from rsmesh_bbs.release_migration import ensure_release_1_1_schema
 from rsmesh_bbs.tc2_migration import (
-    ensure_tc2_upgrade_schema,
     import_tc2_sync_peers_from_ini,
     migrate_tc2_ini_to_yaml,
+    prepare_tc2_upgrade,
 )
 
 
@@ -51,7 +56,7 @@ class TestTc2UpgradeSchema:
         )
         conn.commit()
         c = conn.cursor()
-        ensure_tc2_upgrade_schema(c)
+        ensure_release_1_1_schema(c)
         conn.commit()
 
         columns = [
@@ -65,7 +70,7 @@ class TestTc2UpgradeSchema:
         _create_tc2_mail_table(conn)
         c = conn.cursor()
 
-        ensure_tc2_upgrade_schema(c)
+        ensure_release_1_1_schema(c)
         conn.commit()
 
         columns = _mail_columns(conn)
@@ -90,13 +95,32 @@ class TestTc2UpgradeSchema:
                )"""
         )
         _create_tc2_mail_table(conn)
+        conn.execute(
+            "DELETE FROM sys_config WHERE cfg_section = 'bbs' AND cfg_key = 'database_version'"
+        )
+        conn.commit()
 
         db_operations.initialize_database(quiet=True)
+        apply_database_upgrades()
 
         assert "recipient_short_name" in _mail_columns(conn)
 
 
 class TestTc2ConfigImport:
+    def test_prepare_tc2_upgrade_merges_release_config_keys(self, tmp_path, monkeypatch):
+        ini_path = tmp_path / "config.ini"
+        ini_path.write_text(
+            "[interface]\ntype = serial\nport = /dev/ttyUSB0\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        assert prepare_tc2_upgrade("config.yml") is True
+        config = yaml.safe_load((tmp_path / "config.yml").read_text(encoding="utf-8"))
+        assert config["bbs"]["core_bulletins"] is True
+        assert config["schedule"]["peer_sync_minutes"] == 5
+        assert config["admin"]["server_log_file"] == "rsmesh-bbs.log"
+
     def test_migrate_tc2_ini_defaults_board_name(self, tmp_path, monkeypatch):
         ini_path = tmp_path / "config.ini"
         yaml_path = tmp_path / "config.yml"
@@ -148,9 +172,13 @@ class TestTc2ToReleaseMigration:
                    synced TEXT NOT NULL DEFAULT 'Y'
                )"""
         )
+        conn.execute(
+            "DELETE FROM sys_config WHERE cfg_section = 'bbs' AND cfg_key = 'database_version'"
+        )
         conn.commit()
 
         db_operations.initialize_database(quiet=True)
+        apply_database_upgrades()
 
         assert get_stored_database_version(c) == RELEASE_1_1
         assert c.execute(

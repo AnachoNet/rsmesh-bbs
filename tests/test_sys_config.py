@@ -14,7 +14,7 @@ def _seed_sys_config():
 class TestSysConfigSchema:
     def test_example_config_defines_required_sections(self):
         schema = get_sys_config_schema()
-        assert list(schema.keys()) == ["bbs", "interface", "schedule"]
+        assert list(schema.keys()) == ["bbs", "interface", "schedule", "admin"]
         assert "board_name" in schema["bbs"]
         assert "peer_sync_minutes" in schema["schedule"]
 

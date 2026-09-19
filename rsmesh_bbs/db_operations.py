@@ -11,7 +11,6 @@ from pathlib import Path
 from .version import BBS_DB_FILE
 from .config_init import (
     DEFAULT_CONFIG_FILE,
-    ensure_config_yaml_schema,
     export_sys_config_to_yaml,
     flatten_yaml_config,
     is_sys_config_key_protected,
@@ -19,8 +18,6 @@ from .config_init import (
     load_example_config_defaults,
 )
 from .sqlite_config import configure_sqlite_connection
-from .tc2_migration import migrate_tc2_database
-from .release_migration import migrate_release_database
 from .utils import (
     send_bulletin_to_sync_peers,
     send_delete_bulletin_to_sync_peers,
@@ -769,10 +766,20 @@ def initialize_database(quiet=False):
                     subject TEXT NOT NULL,
                     created TEXT NOT NULL
                 )''')
-    migrate_tc2_database(c)
+    c.execute('''CREATE TABLE IF NOT EXISTS pending_resync_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_bbs_node TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created TEXT NOT NULL
+                )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS peer_resync_outbound (
+                    requester_bbs_node TEXT NOT NULL PRIMARY KEY,
+                    stage TEXT NOT NULL,
+                    stage_cursor INTEGER NOT NULL DEFAULT 0,
+                    mesh_batch_index INTEGER NOT NULL DEFAULT 0,
+                    updated INTEGER NOT NULL
+                )''')
     _ensure_default_modules(c)
-    migrate_release_database(c)
-    _ensure_database_indexes(c)
     conn.commit()
     if not quiet:
         print("Database schema initialized.")
@@ -1227,7 +1234,6 @@ def ensure_sys_config_from_yaml(config_file=None):
                 (cfg_section, cfg_key, cfg_value),
             )
     conn.commit()
-    ensure_config_yaml_schema(config_file)
 
 
 SCHEDULE_CONFIG_DEFAULTS = {

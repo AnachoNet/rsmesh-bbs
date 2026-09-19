@@ -17,6 +17,13 @@ from rsmesh_bbs.version import VERSION
 
 
 class TestReleaseMigration:
+    def test_initialize_database_alone_does_not_stamp_version(self, monkeypatch, tmp_path):
+        db_path = tmp_path / "fresh.db"
+        monkeypatch.setattr(db_operations, "BBS_DB_FILE", str(db_path))
+        db_operations.initialize_database(quiet=True)
+        conn = db_operations.get_db_connection()
+        assert get_stored_database_version(conn.cursor()) is None
+
     def test_fresh_install_stamps_database_version(self, temp_db):
         conn = db_operations.get_db_connection()
         c = conn.cursor()

@@ -249,26 +249,10 @@ def export_sys_config_to_yaml(entries: list[tuple[str, str, str]], config_file: 
 
 
 def ensure_config_yaml_schema(config_file: Optional[str] = None) -> bool:
-    """Add missing example_config.yml keys to config.yml without overwriting values."""
-    config_file = config_file or DEFAULT_CONFIG_FILE
-    path = Path(config_file)
-    if not path.is_file():
-        return False
-    config = load_config(str(path))
-    example = load_config(str(get_example_config_path()))
-    updated = False
-    for section, values in example.items():
-        if not isinstance(values, dict):
-            continue
-        section_dict = config.setdefault(section, {})
-        for key, default_value in values.items():
-            if key not in section_dict:
-                section_dict[key] = default_value
-                updated = True
-    if updated:
-        with path.open("w", encoding="utf-8") as handle:
-            yaml.dump(config, handle, default_flow_style=False, sort_keys=False)
-    return updated
+    """Release upgrade helper: merge example_config.yml keys into config.yml."""
+    from .release_migration import merge_release_config_yaml
+
+    return merge_release_config_yaml(config_file)
 
 
 def init_cli_parser() -> argparse.Namespace:

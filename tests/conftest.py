@@ -2,6 +2,7 @@ import pytest
 
 from rsmesh_bbs import db_operations
 from rsmesh_bbs.mesh_client import BbsMeshClient
+from rsmesh_bbs.release_migration import apply_database_upgrades
 from rsmesh_bbs.utils import clear_user_display_cache, user_states
 
 
@@ -27,6 +28,7 @@ def temp_db(monkeypatch, tmp_path):
     monkeypatch.setattr(db_operations, "BBS_DB_FILE", str(db_path))
     _close_db_connection()
     db_operations.initialize_database(quiet=True)
+    apply_database_upgrades()  # upgrades when needed; always ensures indexes + version stamp
     yield db_path
     _close_db_connection()
 
