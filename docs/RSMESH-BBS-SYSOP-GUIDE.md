@@ -2,8 +2,6 @@
 
 Release 1.1
 
-
-
 ## Table of contents
 
 - [Introduction](#introduction)
@@ -116,6 +114,7 @@ Release 1.1
   - [Reconcile Workflow](#reconcile-workflow)
 - [Complete Menu Tree](#complete-menu-tree)
 - [Links](#links)
+- [License](#license)
 
 # Introduction
 
@@ -1338,3 +1337,7 @@ Mesh main menu (separate from the admin tool): title line plus cached `mesh_ui/m
 | Heltec                | https://heltec.org                              |
 | RAK Wireless          | https://www.rakwireless.com                     |
 | Seeed Studio          | https://www.seeedstudio.com                     |
+
+# License
+
+GPL-3.0-only. See [LICENSE](LICENSE).

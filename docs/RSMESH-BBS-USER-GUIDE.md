@@ -52,10 +52,10 @@ Open Mail from the Main Menu with **`M`**, then **`R`** (Read) or **`S`** (Send)
 
 From the **main menu**, you can skip the Mail submenu with TC²-style commands (the main menu text is unchanged):
 
-| Command | Same as |
-|---------|---------|
-| `RM` | Mail → Read → **New** (compact list of unread mail) |
-| `SM` | Mail → **Send** |
+| Command | Same as                                             |
+| ------- | --------------------------------------------------- |
+| `RM`    | Mail → Read → **New** (compact list of unread mail) |
+| `SM`    | Mail → **Send**                                     |
 
 When **new mail is delivered on this BBS** (someone sent to you from the mesh or admin), you may get a short direct message such as `New mail from RSN1. Send RM to read new mail.` Mail that arrived **only via sync from another board** does not trigger this alert.
 
@@ -102,3 +102,7 @@ Bulletins, channels, and mail you see on a BBS may have been posted on that syst
 ## SysAdmin Capabilities on the Mesh
 
 **Sysadmin** nodes have additional options on some Menus as outlined above, including posting to Urgent, deleting bulletins, and extra actions in some modules.
+
+# License
+
+GPL-3.0-only. See [LICENSE](LICENSE).

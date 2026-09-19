@@ -36,6 +36,7 @@ Reference for contributors and module authors: repository layout, tests, the mod
     - [NODES](#nodes)
     - [CHUNK (transport wrapper)](#chunk-transport-wrapper)
     - [Quick reference](#quick-reference)
+- [License](#license)
 
 ## Project layout
 
@@ -97,11 +98,11 @@ modules/
     storage.py         # Optional: data/helpers
 ```
 
-| File | Purpose |
-|------|---------|
-| `module.py` | Mesh menu handler (`on_load`, `handle_menu`, scheduled tasks) |
+| File              | Purpose                                                            |
+| ----------------- | ------------------------------------------------------------------ |
+| `module.py`       | Mesh menu handler (`on_load`, `handle_menu`, scheduled tasks)      |
 | `<name>_admin.py` | Optional admin submenu (`run_admin_menu(run_submenu, back_label)`) |
-| `config.yml` | Module-specific settings |
+| `config.yml`      | Module-specific settings                                           |
 
 Modules are registered in the `modules` table (seeded at startup). Enable modules in the SysAdmin **Modules** menu. Mesh users open the module list from the main menu with **M[o]dules** (`O`). Each enabled module appears there using its configured menu option letter. When a core service is disabled, its main-menu key (`B`, `C`, or `M`) can be claimed by a module instead.
 
@@ -131,23 +132,23 @@ Return `MODULE_RESULT_EXIT` when the user should return to the main menu (for ex
 
 ### ModuleContext (`ctx`)
 
-| Method | Use when |
-|--------|----------|
-| `ctx.send(sender_id, text)` | Short, single-shot prompts where ordering does not matter. Minimal pacing. |
-| `ctx.send_user_message(sender_id, text)` | One user-facing reply with mesh pacing. **Preferred for most UI.** |
-| `ctx.send_user_messages(sender_id, messages)` | Several messages that must arrive in order (for example stats, then menu). **Preferred for content + follow-up prompt.** |
-| `ctx.send_bundled(sender_id, lines, trailing_message=None)` | Long line-oriented output split into 200-character mesh bundles, with optional final message (for example a menu). |
-| `ctx.enqueue_send(sender_id, text)` | Queue a paced message from a **scheduled task** (see below). |
-| `ctx.enqueue_send_messages(sender_id, messages)` | Queue a paced message sequence from a scheduled task. |
-| `ctx.is_sysadmin(sender_id)` | True if the sender is a configured sysadmin node. |
-| `ctx.path(*parts)` | Path inside the module directory (for databases, config files). |
-| `ctx.register_service(name, service)` | Register a shared object other code can look up. |
-| `ctx.register_schedule(name, minutes, callback)` | Run `callback(ctx)` on an interval while the module is enabled. |
-| `ctx.register_sync(registration)` | Register optional peer sync handlers (`ModuleSyncRegistration`). |
-| `ctx.get_bbs_info()` | Read-only BBS identity (`board_name`, radio `node_id` / `short_name` / `long_name`). |
-| `ctx.register_config(key, default=..., editor=...)` | Declare module-owned config stored in `sys_config` under `module:<module_dir>`. |
-| `ctx.get_config(key, default=...)` | Read this module's config only (other sections are not accessible through the API). |
-| `ctx.sync_wire_type(suffix)` | Expand a sync suffix to the on-wire RS type for this module. |
+| Method                                                      | Use when                                                                                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `ctx.send(sender_id, text)`                                 | Short, single-shot prompts where ordering does not matter. Minimal pacing.                                               |
+| `ctx.send_user_message(sender_id, text)`                    | One user-facing reply with mesh pacing. **Preferred for most UI.**                                                       |
+| `ctx.send_user_messages(sender_id, messages)`               | Several messages that must arrive in order (for example stats, then menu). **Preferred for content + follow-up prompt.** |
+| `ctx.send_bundled(sender_id, lines, trailing_message=None)` | Long line-oriented output split into 200-character mesh bundles, with optional final message (for example a menu).       |
+| `ctx.enqueue_send(sender_id, text)`                         | Queue a paced message from a **scheduled task** (see below).                                                             |
+| `ctx.enqueue_send_messages(sender_id, messages)`            | Queue a paced message sequence from a scheduled task.                                                                    |
+| `ctx.is_sysadmin(sender_id)`                                | True if the sender is a configured sysadmin node.                                                                        |
+| `ctx.path(*parts)`                                          | Path inside the module directory (for databases, config files).                                                          |
+| `ctx.register_service(name, service)`                       | Register a shared object other code can look up.                                                                         |
+| `ctx.register_schedule(name, minutes, callback)`            | Run `callback(ctx)` on an interval while the module is enabled.                                                          |
+| `ctx.register_sync(registration)`                           | Register optional peer sync handlers (`ModuleSyncRegistration`).                                                         |
+| `ctx.get_bbs_info()`                                        | Read-only BBS identity (`board_name`, radio `node_id` / `short_name` / `long_name`).                                     |
+| `ctx.register_config(key, default=..., editor=...)`         | Declare module-owned config stored in `sys_config` under `module:<module_dir>`.                                          |
+| `ctx.get_config(key, default=...)`                          | Read this module's config only (other sections are not accessible through the API).                                      |
+| `ctx.sync_wire_type(suffix)`                                | Expand a sync suffix to the on-wire RS type for this module.                                                             |
 
 #### BBS identity (read-only)
 
@@ -242,14 +243,14 @@ class Module:
             mark_sync_peers_synced("module:events", record_key, synced)
 ```
 
-| Registration field | Purpose |
-|--------------------|---------|
-| `record_type` | Must be `module:<module_dir>` (matches the module's directory name under `modules/`) |
-| `wire_suffixes` | Short operation names; expanded to `{MODULE_DIR}_{SUFFIX}` on the wire |
-| `legacy_wire_types` | Optional deprecated inbound aliases; omit for new modules |
-| `on_inbound_rs` | Called for RS wire messages when the module is enabled |
-| `sync_pending` | Called from the background sync worker with all enabled peers (before the deferred mesh-nodes sync step) |
-| `list_unsynced` | Optional callback returning `(record_key, label)` pairs for admin **List Unsynced Data** |
+| Registration field  | Purpose                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `record_type`       | Must be `module:<module_dir>` (matches the module's directory name under `modules/`)                                      |
+| `wire_suffixes`     | Short operation names; expanded to `{MODULE_DIR}_{SUFFIX}` on the wire                                                    |
+| `legacy_wire_types` | Optional deprecated inbound aliases; omit for new modules                                                                 |
+| `on_inbound_rs`     | Called for RS wire messages when the module is enabled                                                                    |
+| `sync_pending`      | Called from the background sync worker with all enabled peers (before the deferred mesh-nodes sync step)                  |
+| `list_unsynced`     | Optional callback returning `(record_key, label)` pairs for admin **List Unsynced Data**                                  |
 | `sync_status_lines` | Optional callback receiving `ModuleSyncStatus`; return custom lines for **Administration → Modules → Module Sync Status** |
 
 **Collision rules:** duplicate expanded wire types are rejected at module load (logged; the conflicting registration is skipped). Core RS types (`BULLETIN`, `MAIL`, `CHUNK`, etc.) cannot be registered. Use `ctx.sync_wire_type(suffix)` when building outbound messages.
@@ -306,11 +307,11 @@ def run_admin_menu(run_submenu, back_label="Modules"):
 
 **Return values from submenu actions:** `run_submenu` redisplays the menu after each action. How the screen is cleared depends on what you return:
 
-| Return | When to use |
-|--------|-------------|
-| **`False`** | List/detail flows that call `paginate_display` (or similar) — those helpers manage their own clear and back navigation. |
+| Return                     | When to use                                                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`False`**                | List/detail flows that call `paginate_display` (or similar) — those helpers manage their own clear and back navigation.                                |
 | **`None`** (bare `return`) | Form or confirmation flows that end with `finish_action_message` — the submenu shows “Press Enter to continue”, then clears before redrawing the menu. |
-| **Integer** (line count) | Rare; positions the continue prompt when the result screen layout needs it (same convention as core admin). |
+| **Integer** (line count)   | Rare; positions the continue prompt when the result screen layout needs it (same convention as core admin).                                            |
 
 Do **not** call `finish_action_message` and then `return False`; the submenu will skip the continue prompt and redraw the menu over the confirmation message.
 
@@ -318,20 +319,20 @@ Do **not** call `finish_action_message` and then `return False`; the submenu wil
 
 Import `admin_ui` from `rsmesh_bbs` (same as core `rsmesh-bbs_admin.py`). Module admin code typically uses:
 
-| Function | Purpose |
-|----------|---------|
+| Function                                                                                               | Purpose                                                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `paginate_display(page_title, lines, *, empty_message=..., select_prompt=..., select_empty_exits=...)` | Paginated 80×24 list view. Returns `False` on back, or `(line_count, choice)` when `select_prompt` is set and the user enters a value. Navigation: **N** next, **P** prev, **Enter** or **X** back. |
-| `display_record_detail(page_title, detail_lines, not_found_message=None)` | Single-record detail screen with “Enter or X=back”. |
-| `list_with_record_view(page_title, list_lines_fn, empty_message, view_fn)` | Paginated list with “Enter ID to view”; calls `view_fn(record_id)` for the chosen row. |
-| `record_detail_lines(fields)` | Build detail lines from `[("Label", value), ...]`; multiline values are indented. |
-| `begin_data_display(page_title)` | Draw the standard SysAdmin header for a data page. |
-| `begin_form_screen(page_title)` | `clear_screen()` then `begin_data_display` — start of an add/edit form. |
-| `finish_action_message(message, page_title)` | Clear screen, show a confirmation or error, draw the footer separator — then return normally (not `False`) so `run_submenu` prompts to continue. |
-| `print_page_header(menu_name=None)` | Header line + separator + blank line. |
-| `print_bold(message)` | Bold, cropped to display width. |
-| `print_separator()` | `=` rule on line 22 layout. |
-| `input_bold(prompt)` | Bold prompt, then `input()`. |
-| `clear_screen()` | Clear the terminal. |
+| `display_record_detail(page_title, detail_lines, not_found_message=None)`                              | Single-record detail screen with “Enter or X=back”.                                                                                                                                                 |
+| `list_with_record_view(page_title, list_lines_fn, empty_message, view_fn)`                             | Paginated list with “Enter ID to view”; calls `view_fn(record_id)` for the chosen row.                                                                                                              |
+| `record_detail_lines(fields)`                                                                          | Build detail lines from `[("Label", value), ...]`; multiline values are indented.                                                                                                                   |
+| `begin_data_display(page_title)`                                                                       | Draw the standard SysAdmin header for a data page.                                                                                                                                                  |
+| `begin_form_screen(page_title)`                                                                        | `clear_screen()` then `begin_data_display` — start of an add/edit form.                                                                                                                             |
+| `finish_action_message(message, page_title)`                                                           | Clear screen, show a confirmation or error, draw the footer separator — then return normally (not `False`) so `run_submenu` prompts to continue.                                                    |
+| `print_page_header(menu_name=None)`                                                                    | Header line + separator + blank line.                                                                                                                                                               |
+| `print_bold(message)`                                                                                  | Bold, cropped to display width.                                                                                                                                                                     |
+| `print_separator()`                                                                                    | `=` rule on line 22 layout.                                                                                                                                                                         |
+| `input_bold(prompt)`                                                                                   | Bold prompt, then `input()`.                                                                                                                                                                        |
+| `clear_screen()`                                                                                       | Clear the terminal.                                                                                                                                                                                 |
 
 Layout constants (24-line display): `DISPLAY_COLUMNS`, `CONTENT_START_LINE`, `CONTENT_END_LINE`, `CONTENT_LINES_PER_PAGE`, `MENU_OPTION_INDENT`, and related `HEADER_*` / `MENU_*` line numbers.
 
@@ -378,13 +379,13 @@ See `modules/bbs_list/bbs_list_admin.py` for list + form patterns, and `modules/
 
 A reference implementation (disabled by default) lives in `modules/example_hello/`. Enable it under **Administration → Modules** and set **Schedule enabled** to `Y` for scheduled tasks to run. It demonstrates:
 
-| Pattern | How |
-|---------|-----|
-| `on_load` / `on_enter` / `on_message` | Records a visit on entry; exits on `X` |
-| Module `config.yml` | `schedule_minutes`, `max_visits` |
-| Module-local SQLite DB | `visits` table with `short_name`, `visited_at`, `greet_pending` |
-| `register_schedule` | Sends `Hello {short_name}!` on the next tick, then trims to the last 5 visits |
-| `example_hello_admin.py` | Lists visit history from the admin tool |
+| Pattern                               | How                                                                           |
+| ------------------------------------- | ----------------------------------------------------------------------------- |
+| `on_load` / `on_enter` / `on_message` | Records a visit on entry; exits on `X`                                        |
+| Module `config.yml`                   | `schedule_minutes`, `max_visits`                                              |
+| Module-local SQLite DB                | `visits` table with `short_name`, `visited_at`, `greet_pending`               |
+| `register_schedule`                   | Sends `Hello {short_name}!` on the next tick, then trims to the last 5 visits |
+| `example_hello_admin.py`              | Lists visit history from the admin tool                                       |
 
 Not shown in the example (see `node_info` for these): `register_service` for other core/module code, `send_bundled` for long mesh output, `ctx.is_sysadmin()` permission checks, and mesh-side scanning of `interface.nodes`.
 
@@ -406,15 +407,15 @@ Not shown in the example (see `node_info` for these): `register_service` for oth
 
 RSMesh BBS supports two peer sync protocol families. Choose the protocol per sync peer in the admin tool. **tc2** preserves wire compatibility with [TC²-BBS-mesh](https://github.com/TheCommsChannel/TC2-BBS-mesh); **rsv1** is the RSMesh extended format for operators running RSMesh (or other RS-aware) peers.
 
-| Topic | **tc2** | **rsv1** |
-|-------|---------|----------|
-| On-wire shape | Pipe-delimited **tc2** records (for example `BULLETIN`, `MAIL`) | **rsv1** `RS` envelope (version, type, JSON) only; pipe messages from RS peers are ignored |
-| TC² compatibility | Yes — follows TC²-BBS-mesh sync conventions | No — RS peers must also use rsv1 |
-| Packet size | Single mesh packet (200 bytes max) | Oversized payloads use `CHUNK` reassembly (see below) |
-| Bulletin ingest | Insert-only by `unique_id` (duplicate ingests skipped) | Upsert by `unique_id` (edits and pin changes propagate) |
-| Pinned bulletins | Not on the wire; pin state is local to each node | `pin` field (`Y`/`N`) in bulletin JSON |
-| Mesh node sync | Not supported | `NODES` batch messages when **Sync mesh nodes** is enabled |
-| Bulletin/channel delete sync | Reconcile when `from_sync='Y'`; ignore peer delete for local origin | `DELETE_BULLETIN` / `DELETE_CHANNEL` by `unique_id`; mail deletes are immediate |
+| Topic                        | **tc2**                                                             | **rsv1**                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| On-wire shape                | Pipe-delimited **tc2** records (for example `BULLETIN`, `MAIL`)     | **rsv1** `RS` envelope (version, type, JSON) only; pipe messages from RS peers are ignored |
+| TC² compatibility            | Yes — follows TC²-BBS-mesh sync conventions                         | No — RS peers must also use rsv1                                                           |
+| Packet size                  | Single mesh packet (200 bytes max)                                  | Oversized payloads use `CHUNK` reassembly (see below)                                      |
+| Bulletin ingest              | Insert-only by `unique_id` (duplicate ingests skipped)              | Upsert by `unique_id` (edits and pin changes propagate)                                    |
+| Pinned bulletins             | Not on the wire; pin state is local to each node                    | `pin` field (`Y`/`N`) in bulletin JSON                                                     |
+| Mesh node sync               | Not supported                                                       | `NODES` batch messages when **Sync mesh nodes** is enabled                                 |
+| Bulletin/channel delete sync | Reconcile when `from_sync='Y'`; ignore peer delete for local origin | `DELETE_BULLETIN` / `DELETE_CHANNEL` by `unique_id`; mail deletes are immediate            |
 
 **tc2** behavior intentionally tracks TC² standards: bulletin sync is create-only, and features such as pinned posts or bulletin edits after the initial sync are not replicated to tc2 peers.
 
@@ -440,12 +441,12 @@ Every rsv1 message uses:
 RS|1|<TYPE>|<json-payload>
 ```
 
-| Part | Meaning |
-|------|---------|
-| `RS` | Wire prefix |
-| `1` | Wire version (`rsv1` → `RS|1|…`) |
-| `<TYPE>` | Message type (uppercase) |
-| `<json-payload>` | Compact JSON object |
+| Part             | Meaning                    |
+| ---------------- | -------------------------- |
+| `RS`             | Wire prefix                |
+| `1`              | Wire version (`rsv1` → `RS |
+| `<TYPE>`         | Message type (uppercase)   |
+| `<json-payload>` | Compact JSON object        |
 
 #### BULLETIN
 
@@ -628,14 +629,18 @@ RS|1|CHUNK|{"u":"95f49967-6bc2-4e9c-b970-0eb671154b02","i":0,"n":4,"p":"RS|1|BUL
 
 #### Quick reference
 
-| Type | JSON keys | rsv1-only? |
-|------|-----------|------------|
-| `BULLETIN` | `b`, `sn`, `sub`, `body`, `uid`, `pin` | No (tc2 uses pipe format) |
-| `MAIL` | `s`, `ssn`, `r`, `rsn`, `sub`, `body`, `uid` | No |
-| `CHANNEL` | `n`, `psk`, `uid` | No (`uid` required on rsv1) |
-| `DELETE_BULLETIN` | `uid` | No |
-| `DELETE_MAIL` | `uid` | No |
-| `DELETE_CHANNEL` | `uid` | Yes |
-| `RESYNC_REQUEST` | _(empty object)_ | Yes |
-| `NODES` | `n` (array of `id`, `sn`, `ln`, `lh`) | Yes |
-| `CHUNK` | `u`, `i`, `n`, `p` | Yes (transport) |
+| Type              | JSON keys                                    | rsv1-only?                  |
+| ----------------- | -------------------------------------------- | --------------------------- |
+| `BULLETIN`        | `b`, `sn`, `sub`, `body`, `uid`, `pin`       | No (tc2 uses pipe format)   |
+| `MAIL`            | `s`, `ssn`, `r`, `rsn`, `sub`, `body`, `uid` | No                          |
+| `CHANNEL`         | `n`, `psk`, `uid`                            | No (`uid` required on rsv1) |
+| `DELETE_BULLETIN` | `uid`                                        | No                          |
+| `DELETE_MAIL`     | `uid`                                        | No                          |
+| `DELETE_CHANNEL`  | `uid`                                        | Yes                         |
+| `RESYNC_REQUEST`  | _(empty object)_                             | Yes                         |
+| `NODES`           | `n` (array of `id`, `sn`, `ln`, `lh`)        | Yes                         |
+| `CHUNK`           | `u`, `i`, `n`, `p`                           | Yes (transport)             |
+
+# License
+
+GPL-3.0-only. See [LICENSE](LICENSE).

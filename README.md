@@ -11,7 +11,7 @@ Based on (and sync compatible with) [TC²-BBS-Mesh](https://github.com/TheCommsC
 - Python 3.8+ (with `venv` support)
 - A Meshtastic node connected by USB serial or TCP (ESP32 WiFi)
 
-## Setup (virtual environment)
+## Setup (Virtual Environment)
 
 Use a project-local virtual environment so dependencies do not mix with system Python packages.
 
@@ -37,9 +37,9 @@ python -m pip install -r requirements.txt
 
 After activation, `python` and `pip` refer to the venv. You can also run scripts without activating by calling the venv interpreter directly (for example `.venv/bin/python` on Linux or `.venv\Scripts\python.exe` on Windows).
 
-## Quick start
+## Quick Start
 
-1. Complete [Setup (virtual environment)](#setup-virtual-environment) above.
+1. Complete [Setup (Virtual Environment)](#setup-virtual-environment) above.
 2. Copy `example_config.yml` to `config.yml` and edit for your node.
 3. Start the BBS server from the project directory (with the venv activated):
 
@@ -62,15 +62,15 @@ python rsmesh-bbs_admin.py
 
 The server creates `rsmesh-bbs.db` in the current working directory. Module data (for example Node Info) is stored under `modules/<name>/`. Run both scripts from the project directory so they use the same files.
 
-## Mesh client (no radio)
+## Mesh Client (No Radio)
 
 `rsmesh-bbs_client.py` simulates a mesh handset in-process for testing without a radio. See the [Sysop Guide](docs/RSMESH-BBS-SYSOP-GUIDE.md#mesh-client-no-radio).
 
-## Using the BBS from the mesh
+## Using the BBS from the Mesh
 
 See the [User Guide](docs/RSMESH-BBS-USER-GUIDE.md) for mesh menus, mail, bulletins, channels, and sysadmin capabilities.
 
-## Admin tool
+## Admin Tool
 
 Run `rsmesh-bbs_admin.py` from the project directory with the [virtual environment](#setup-virtual-environment) activated (same as the server). It manages bulletins, mail, channels, the node catalog, sync peers, modules, and bulletin delete reconciliation.
 
@@ -80,11 +80,11 @@ See the [Sysop Guide](docs/RSMESH-BBS-SYSOP-GUIDE.md) for configuration, operato
 
 If you are migrating from TC²-BBS-Mesh or upgrading an existing RSMesh BBS 1.0 install, see [Upgrading](docs/UPGRADING.md) for migration steps and release notes.
 
-## Cross-platform support
+## Cross-platform Support
 
 The Python code runs on Linux, Windows, and macOS. Use the same [virtual environment](#setup-virtual-environment) on every platform; differences are mostly about how you connect the radio and how you run the server as a background service.
 
-### Serial (USB) examples
+### Serial (USB) Examples
 
 Set `type: serial` and the correct `port` for your OS in `config.yml`:
 
@@ -122,7 +122,7 @@ interface:
 
 Check Device Manager for the assigned COM port. Use Windows Terminal or another modern console for the admin tool bold formatting.
 
-### TCP (WiFi) example
+### TCP (WiFi) Example
 
 TCP works the same on all platforms and is useful for ESP32-based nodes:
 
@@ -132,12 +132,12 @@ interface:
   hostname: 192.168.1.100
 ```
 
-### Running as a service
+### Running as a Service
 
-| Platform | Approach |
-|----------|----------|
-| **Linux** | Use `rsmesh-bbs.service` as a systemd unit (see below). |
-| **macOS** | Run manually with the venv activated, or create a `launchd` plist if you need auto-start. |
+| Platform    | Approach                                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Linux**   | Use `rsmesh-bbs.service` as a systemd unit (see below).                                                                        |
+| **macOS**   | Run manually with the venv activated, or create a `launchd` plist if you need auto-start.                                      |
 | **Windows** | Run manually with the venv activated, or use Task Scheduler to start `.venv\Scripts\python.exe rsmesh-bbs_server.py` at login. |
 
 `rsmesh-bbs_admin.py` is intended for interactive use and does not need to run as a service.
@@ -185,16 +185,16 @@ If the service fails to start, check the server log file (default `rsmesh-bbs.lo
 
 Common causes after enabling the venv-based service:
 
-| Symptom in journal | Fix |
-|--------------------|-----|
-| `virtual environment not found` | Run `python3 -m venv .venv` and `pip install -r requirements.txt` in `/opt/rsmesh-bbs` |
-| `configuration file not found` | Copy and edit `config.yml` in `/opt/rsmesh-bbs` |
-| `missing Python package` | `.venv/bin/python -m pip install -r requirements.txt` |
-| `cannot write database` / `read-only` / `readonly database` | `sudo chown -R <service-user>:<service-user> /opt/rsmesh-bbs` — the service account must own the database and WAL files |
-| `PermissionError` on serial port | Add service user to `dialout` (`SupplementaryGroups=dialout` in the unit file) and verify `interface.port` in `config.yml` |
-| `No serial ports detected` | Set `interface.port` explicitly, or use `interface.type: tcp` with `hostname` |
+| Symptom in journal                                          | Fix                                                                                                                        |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `virtual environment not found`                             | Run `python3 -m venv .venv` and `pip install -r requirements.txt` in `/opt/rsmesh-bbs`                                     |
+| `configuration file not found`                              | Copy and edit `config.yml` in `/opt/rsmesh-bbs`                                                                            |
+| `missing Python package`                                    | `.venv/bin/python -m pip install -r requirements.txt`                                                                      |
+| `cannot write database` / `read-only` / `readonly database` | `sudo chown -R <service-user>:<service-user> /opt/rsmesh-bbs` — the service account must own the database and WAL files    |
+| `PermissionError` on serial port                            | Add service user to `dialout` (`SupplementaryGroups=dialout` in the unit file) and verify `interface.port` in `config.yml` |
+| `No serial ports detected`                                  | Set `interface.port` explicitly, or use `interface.type: tcp` with `hostname`                                              |
 
-## Thanks to
+## Special Thanks
 
 - [TC²-BBS](https://github.com/TheCommsChannel/TC2-BBS-mesh)
 - [Meshtastic](https://github.com/meshtastic)
