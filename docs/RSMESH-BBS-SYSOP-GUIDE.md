@@ -152,7 +152,7 @@ For platform documentation and hardware choices, see [Links](#links) below and [
 
 ### Installation
 
-- **Source:** [AnachoNet/rsmesh-bbs](https://github.com/AnachoNet/rsmesh-bbs) (this repository).
+- **Source:** [AnachroNet/rsmesh-bbs](https://github.com/AnachroNet/rsmesh-bbs) (this repository).
 - **Steps:** Create a Python virtual environment, install `requirements.txt`, copy `example_config.yml` to `config.yml`, and connect your radio. Full platform notes (Linux, Windows, macOS, serial/TCP, systemd) are in the [README](../README.md#setup-virtual-environment).
 
 ### Configuration
@@ -1332,7 +1332,7 @@ Mesh main menu (separate from the admin tool): title line plus cached `mesh_ui/m
 | Resource              | URL                                             |
 | --------------------- | ----------------------------------------------- |
 | Meshtastic            | https://meshtastic.org                          |
-| RSMesh BBS (GitHub)   | https://github.com/AnachoNet/rsmesh-bbs        |
+| RSMesh BBS (GitHub)   | https://github.com/AnachroNet/rsmesh-bbs        |
 | TC²-BBS-Mesh (GitHub) | https://github.com/TheCommsChannel/TC2-BBS-mesh |
 | Heltec                | https://heltec.org                              |
 | RAK Wireless          | https://www.rakwireless.com                     |
