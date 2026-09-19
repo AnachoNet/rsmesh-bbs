@@ -10,15 +10,13 @@ TODO for Release 1.2
     - Would be good to make it a limited period ban (say 1 day, a week, etc) or
       permanent
 
-- MQTT Integration
+- MQTT Integration for Sync
     - Topic Structure
       - MESH_BBS/{Originating_System_ID}/RS/{Protocol_Version}/{Type}/{json-payload}
       - Can't think of a way to limit visibility for any users that have access to
         the MQTT server.  Could operate with this topic structure and let peers set
         up listeners as "subscribers".  Very different than the point-to-point nature
         of mesh peers.
-    - Could be used to enable IP/Internet sync between boards
-    - Could allow system operators to decide what {Type}s get published
     - Would be good if a board could publish to multiple MQTT servers
 
 - Event/Calendar Module
@@ -58,3 +56,19 @@ TODO for Release 1.2
     - Add functionality to pull programmed Channels from radio (as in the Channels section
       returned by meshtastic --info) in to the Channels table (with default set to not 
       publish) to admin tool
+
+- Radio Management
+    - Pull identity: longName, shortName, role, firmwareVersion, hex_node_id, publicKey
+    - Pull hardware type: hwModel, macaddr
+    - Pull lora info: modemPreset, region
+    - Pull status: batteryLevel, voltage, uptimeSeconds, time, locationSource, latitude,
+      longitude, altitude
+    - Set serial port (update config.yml on change)
+    - Set fixed location coordinates
+    - Set time
+    - Set Region
+    - Set modemPreset
+    - Set primary, secondary, tertiary admin node public keys
+    - Enable/disable wifi, bluetooth, ethernet
+    - Push channels from Channel Directory to secondary channels
+    
